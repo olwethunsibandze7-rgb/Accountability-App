@@ -1,23 +1,23 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-// State: Blocked hours map (day -> set of hours)
-final blockedHoursProvider = StateNotifierProvider<BlockedHoursNotifier, Map<String, Set<int>>>(
+final blockedHoursProvider =
+    StateNotifierProvider<BlockedHoursNotifier, Map<String, Set<int>>>(
   (ref) => BlockedHoursNotifier(),
 );
 
 class BlockedHoursNotifier extends StateNotifier<Map<String, Set<int>>> {
   BlockedHoursNotifier()
       : super({
-          "Mon": {},
-          "Tue": {},
-          "Wed": {},
-          "Thu": {},
-          "Fri": {},
-          "Sat": {},
+          "Mon": <int>{},
+          "Tue": <int>{},
+          "Wed": <int>{},
+          "Thu": <int>{},
+          "Fri": <int>{},
+          "Sat": <int>{},
         });
 
   void toggle(String day, int hour) {
-    final currentSet = state[day] ?? {};
+    final currentSet = state[day] ?? <int>{};
     final newSet = Set<int>.from(currentSet);
 
     if (newSet.contains(hour)) {
