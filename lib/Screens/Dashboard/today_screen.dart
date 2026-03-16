@@ -1,3 +1,5 @@
+// ignore_for_file: unused_local_variable
+
 import 'dart:async';
 
 import 'package:achievr_app/Screens/habit_log_service.dart';
@@ -27,6 +29,7 @@ class _TodayScreenState extends State<TodayScreen> {
   Timer? _clockTimer;
 
   static const Duration _gracePeriod = Duration(minutes: 30);
+  static const Duration _startsSoonThreshold = Duration(minutes: 60);
 
   DateTime get _screenNow => AppClock.now();
   DateTime get _screenToday => AppClock.today();
@@ -306,17 +309,129 @@ class _TodayScreenState extends State<TodayScreen> {
     );
   }
 
-  Map<String, dynamic>? get _nextTask {
-    final now = _screenNow;
+  String _taskState(Map<String, dynamic> log) {
+    final rawStatus = (log['status'] ?? 'pending').toString();
+    if (rawStatus == 'done') return 'done';
 
+    final start = _logStartDateTime(log);
+    final end = _logEndDateTime(log);
+
+    if (start == null || end == null) return 'available';
+
+    final now = _screenNow;
+    final latestAllowed = end.add(_gracePeriod);
+
+    if (now.isAfter(latestAllowed)) return 'missed';
+    if (!now.isBefore(start) && !now.isAfter(latestAllowed)) return 'available';
+
+    final untilStart = start.difference(now);
+    if (!untilStart.isNegative && untilStart <= _startsSoonThreshold) {
+      return 'soon';
+    }
+
+    return 'upcoming';
+  }
+
+  String _taskStateLabel(String state) {
+    switch (state) {
+      case 'done':
+        return 'Done';
+      case 'available':
+        return 'Available now';
+      case 'soon':
+        return 'Starts soon';
+      case 'upcoming':
+        return 'Upcoming';
+      case 'missed':
+        return 'Missed';
+      default:
+        return 'Pending';
+    }
+  }
+
+  Color _taskStateTextColor(String state) {
+    switch (state) {
+      case 'done':
+        return Colors.greenAccent;
+      case 'available':
+        return const Color(0xFFF5F5F5);
+      case 'soon':
+        return const Color(0xFFFFD166);
+      case 'upcoming':
+        return const Color(0xFFB3B3BB);
+      case 'missed':
+        return const Color(0xFFFF8A80);
+      default:
+        return const Color(0xFFB3B3BB);
+    }
+  }
+
+  Color _taskStateBorderColor(String state) {
+    switch (state) {
+      case 'done':
+        return const Color(0xFF2E7D32);
+      case 'available':
+        return const Color(0xFFF5F5F5);
+      case 'soon':
+        return const Color(0xFFFFD166);
+      case 'upcoming':
+        return const Color(0xFF3A3A42);
+      case 'missed':
+        return const Color(0xFFE57373);
+      default:
+        return const Color(0xFF232329);
+    }
+  }
+
+  Color _taskStateBackgroundColor(String state) {
+    switch (state) {
+      case 'done':
+        return const Color(0x142E7D32);
+      case 'available':
+        return const Color(0x22F5F5F5);
+      case 'soon':
+        return const Color(0x22FFD166);
+      case 'upcoming':
+        return const Color(0xFF101013);
+      case 'missed':
+        return const Color(0x22E57373);
+      default:
+        return const Color(0xFF101013);
+    }
+  }
+
+  List<Map<String, dynamic>> get _availableLogs => todayLogs
+      .where((log) => _taskState(log) == 'available')
+      .toList()
+    ..sort(_compareLogsByStartTime);
+
+  List<Map<String, dynamic>> get _comingUpLogs => todayLogs
+      .where((log) {
+        final state = _taskState(log);
+        return state == 'soon' || state == 'upcoming';
+      })
+      .toList()
+    ..sort(_compareLogsByStartTime);
+
+  List<Map<String, dynamic>> get _completedLogs => todayLogs
+      .where((log) => _taskState(log) == 'done')
+      .toList()
+    ..sort(_compareLogsByStartTime);
+
+  List<Map<String, dynamic>> get _missedLogs => todayLogs
+      .where((log) => _taskState(log) == 'missed')
+      .toList()
+    ..sort(_compareLogsByStartTime);
+
+  Map<String, dynamic>? get _nextTask {
     final pendingLogs = todayLogs
         .where((log) => (log['status'] ?? 'pending').toString() != 'done')
         .toList()
       ..sort(_compareLogsByStartTime);
 
     for (final log in pendingLogs) {
-      final start = _logStartDateTime(log);
-      if (start != null && !start.isBefore(now)) {
+      final state = _taskState(log);
+      if (state == 'available' || state == 'soon' || state == 'upcoming') {
         return log;
       }
     }
@@ -346,11 +461,45 @@ class _TodayScreenState extends State<TodayScreen> {
     return 'Starting now';
   }
 
-  int get _doneCount =>
-      todayLogs.where((log) => log['status'].toString() == 'done').length;
+  String _nextTaskMessage(Map<String, dynamic> log) {
+    final state = _taskState(log);
+    final start = _logStartDateTime(log);
+    final end = _logEndDateTime(log);
 
+    if (state == 'available') {
+      if (end != null) {
+        final latestAllowed = end.add(_gracePeriod);
+        final remaining = latestAllowed.difference(_screenNow);
+
+        if (!remaining.isNegative) {
+          final hours = remaining.inHours;
+          final minutes = remaining.inMinutes % 60;
+
+          if (hours > 0) {
+            return 'Execution window is open. Closes in ${hours}h ${minutes}m.';
+          }
+          if (minutes > 0) {
+            return 'Execution window is open. Closes in ${minutes}m.';
+          }
+        }
+      }
+      return 'Execution window is open now.';
+    }
+
+    if (state == 'soon' || state == 'upcoming') {
+      return start != null ? _timeUntil(start) : 'Scheduled for later today';
+    }
+
+    if (state == 'missed') {
+      return 'This task was missed. Recover the next available commitment.';
+    }
+
+    return 'Scheduled for today';
+  }
+
+  int get _doneCount => _completedLogs.length;
   int get _pendingCount =>
-      todayLogs.where((log) => log['status'].toString() != 'done').length;
+      todayLogs.where((log) => _taskState(log) != 'done').length;
 
   Widget _buildMetricChip({
     required String label,
@@ -382,6 +531,25 @@ class _TodayScreenState extends State<TodayScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildStatusChip(String state) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: _taskStateBackgroundColor(state),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _taskStateBorderColor(state)),
+      ),
+      child: Text(
+        _taskStateLabel(state),
+        style: TextStyle(
+          color: _taskStateTextColor(state),
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
@@ -522,6 +690,7 @@ class _TodayScreenState extends State<TodayScreen> {
     final start = _logStartDateTime(nextTask);
     final verificationType =
         (nextTask['verification_type'] ?? 'manual').toString();
+    final state = _taskState(nextTask);
 
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
@@ -541,7 +710,7 @@ class _TodayScreenState extends State<TodayScreen> {
         decoration: BoxDecoration(
           color: const Color(0xFF17171A),
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFF232329)),
+          border: Border.all(color: _taskStateBorderColor(state)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -550,13 +719,21 @@ class _TodayScreenState extends State<TodayScreen> {
               'Next task',
               subtitle: 'Your next priority for today.',
             ),
-            Text(
-              habit?['title']?.toString() ?? 'Untitled Habit',
-              style: const TextStyle(
-                color: Color(0xFFF5F5F5),
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    habit?['title']?.toString() ?? 'Untitled Habit',
+                    style: const TextStyle(
+                      color: Color(0xFFF5F5F5),
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                _buildStatusChip(state),
+              ],
             ),
             const SizedBox(height: 6),
             Text(
@@ -595,7 +772,7 @@ class _TodayScreenState extends State<TodayScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    start != null ? _timeUntil(start) : 'Scheduled for today',
+                    _nextTaskMessage(nextTask),
                     style: const TextStyle(
                       color: Color(0xFFB3B3BB),
                       fontSize: 13,
@@ -612,6 +789,13 @@ class _TodayScreenState extends State<TodayScreen> {
                 fontSize: 12,
               ),
             ),
+            if (state == 'available' && verificationType == 'manual') ...[
+              const SizedBox(height: 14),
+              Align(
+                alignment: Alignment.centerRight,
+                child: _buildActionButtonForLog(nextTask),
+              ),
+            ],
           ],
         ),
       ),
@@ -698,16 +882,17 @@ class _TodayScreenState extends State<TodayScreen> {
     final goal = habit?['goals'] as Map<String, dynamic>?;
     final availability = _manualCompletionAvailability(log);
     final verificationType = (log['verification_type'] ?? 'manual').toString();
+    final state = _taskState(log);
 
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
-      duration: Duration(milliseconds: 320 + (index * 90)),
+      duration: Duration(milliseconds: 220 + (index * 70)),
       curve: Curves.easeOutCubic,
       builder: (context, value, child) {
         return Opacity(
           opacity: value,
           child: Transform.translate(
-            offset: Offset(0, 16 * (1 - value)),
+            offset: Offset(0, 14 * (1 - value)),
             child: child,
           ),
         );
@@ -718,11 +903,7 @@ class _TodayScreenState extends State<TodayScreen> {
         decoration: BoxDecoration(
           color: const Color(0xFF101013),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: isDone
-                ? const Color(0xFF2E7D32)
-                : const Color(0xFF232329),
-          ),
+          border: Border.all(color: _taskStateBorderColor(state)),
         ),
         child: Column(
           children: [
@@ -735,7 +916,15 @@ class _TodayScreenState extends State<TodayScreen> {
                   margin: const EdgeInsets.only(top: 5),
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: isDone ? Colors.green : const Color(0xFF7C7C84),
+                    color: isDone
+                        ? Colors.green
+                        : state == 'missed'
+                            ? const Color(0xFFE57373)
+                            : state == 'available'
+                                ? const Color(0xFFF5F5F5)
+                                : state == 'soon'
+                                    ? const Color(0xFFFFD166)
+                                    : const Color(0xFF7C7C84),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -769,12 +958,20 @@ class _TodayScreenState extends State<TodayScreen> {
                         ),
                       ),
                       const SizedBox(height: 6),
-                      Text(
-                        'Verification: $verificationType',
-                        style: const TextStyle(
-                          color: Color(0xFF9A9AA3),
-                          fontSize: 12,
-                        ),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          _buildStatusChip(state),
+                          Text(
+                            'Verification: $verificationType',
+                            style: const TextStyle(
+                              color: Color(0xFF9A9AA3),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
                       ),
                       if (!isDone && verificationType == 'manual') ...[
                         const SizedBox(height: 6),
@@ -805,7 +1002,12 @@ class _TodayScreenState extends State<TodayScreen> {
     );
   }
 
-  Widget _buildTodayTasksCard() {
+  Widget _buildTaskSection({
+    required String title,
+    required String subtitle,
+    required List<Map<String, dynamic>> logs,
+    required String emptyText,
+  }) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -817,20 +1019,20 @@ class _TodayScreenState extends State<TodayScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildSectionTitle(
-            'Today’s schedule',
-            subtitle: 'Your scheduled commitments for today.',
+            '$title (${logs.length})',
+            subtitle: subtitle,
           ),
-          if (todayLogs.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 4),
+          if (logs.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
               child: Text(
-                'No habits are scheduled for today.',
-                style: TextStyle(color: Color(0xFF9A9AA3)),
+                emptyText,
+                style: const TextStyle(color: Color(0xFF9A9AA3)),
               ),
             ),
           ...List.generate(
-            todayLogs.length,
-            (index) => _buildTaskCard(todayLogs[index], index),
+            logs.length,
+            (index) => _buildTaskCard(logs[index], index),
           ),
         ],
       ),
@@ -838,10 +1040,12 @@ class _TodayScreenState extends State<TodayScreen> {
   }
 
   Widget _buildFocusButton() {
+    final hasAvailableNow = _availableLogs.isNotEmpty;
+
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton.icon(
-        onPressed: todayLogs.isEmpty ? null : () {},
+        onPressed: hasAvailableNow ? () {} : null,
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFFF5F5F5),
           foregroundColor: Colors.black,
@@ -854,9 +1058,9 @@ class _TodayScreenState extends State<TodayScreen> {
           elevation: 0,
         ),
         icon: const Icon(Icons.center_focus_strong),
-        label: const Text(
-          'Focus Mode',
-          style: TextStyle(
+        label: Text(
+          hasAvailableNow ? 'Focus Mode' : 'No task available now',
+          style: const TextStyle(
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -900,7 +1104,33 @@ class _TodayScreenState extends State<TodayScreen> {
             const SizedBox(height: 18),
             _buildNextTaskCard(),
             const SizedBox(height: 18),
-            _buildTodayTasksCard(),
+            _buildTaskSection(
+              title: 'Available now',
+              subtitle: 'These commitments can be executed right now.',
+              logs: _availableLogs,
+              emptyText: 'No tasks are currently available.',
+            ),
+            const SizedBox(height: 18),
+            _buildTaskSection(
+              title: 'Coming up',
+              subtitle: 'These are the next commitments later today.',
+              logs: _comingUpLogs,
+              emptyText: 'No more upcoming tasks for today.',
+            ),
+            const SizedBox(height: 18),
+            _buildTaskSection(
+              title: 'Completed',
+              subtitle: 'These commitments are already finished.',
+              logs: _completedLogs,
+              emptyText: 'Nothing completed yet today.',
+            ),
+            const SizedBox(height: 18),
+            _buildTaskSection(
+              title: 'Missed / expired',
+              subtitle: 'These execution windows have already closed.',
+              logs: _missedLogs,
+              emptyText: 'No missed tasks so far.',
+            ),
             const SizedBox(height: 20),
             _buildFocusButton(),
           ],

@@ -315,6 +315,16 @@ class _ProgressScreenState extends State<ProgressScreen> {
     return _doneThisWeek / _totalThisWeek;
   }
 
+  double get _todayRecoverabilityRate {
+    if (_totalToday == 0) return 0;
+    return (_doneToday + _availableNowToday + _upcomingToday) / _totalToday;
+  }
+
+  double get _weekRecoverabilityRate {
+    if (_totalThisWeek == 0) return 0;
+    return (_doneThisWeek + _remainingThisWeek) / _totalThisWeek;
+  }
+
   Widget _buildMetricChip({
     required String label,
     required String value,
@@ -400,7 +410,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
           ),
           const SizedBox(height: 10),
           const Text(
-            'Track consistency, completion, and the discipline you are building over time.',
+            'Track consistency, recoverability, and the discipline you are building over time.',
             style: TextStyle(
               color: Color(0xFFB3B3BB),
               height: 1.45,
@@ -479,6 +489,128 @@ class _ProgressScreenState extends State<ProgressScreen> {
     );
   }
 
+  Widget _buildDayStatusCard() {
+    String headline;
+    String body;
+
+    if (_totalToday == 0) {
+      headline = 'No commitments today';
+      body = 'There are no scheduled tasks to execute today.';
+    } else if (_availableNowToday > 0) {
+      headline = 'Today is recoverable now';
+      body =
+          'You currently have $_availableNowToday task${_availableNowToday == 1 ? '' : 's'} available to execute right now.';
+    } else if (_doneToday > 0 && _upcomingToday > 0) {
+      headline = 'Momentum is active';
+      body =
+          'You have already completed $_doneToday task${_doneToday == 1 ? '' : 's'}, and $_upcomingToday more ${_upcomingToday == 1 ? 'is' : 'are'} still coming later.';
+    } else if (_upcomingToday > 0) {
+      headline = 'Later commitments remain';
+      body =
+          'Nothing is open right now, but $_upcomingToday task${_upcomingToday == 1 ? '' : 's'} ${_upcomingToday == 1 ? 'is' : 'are'} still scheduled for later today.';
+    } else if (_missedToday > 0) {
+      headline = 'Today has execution loss';
+      body =
+          '$_missedToday task${_missedToday == 1 ? '' : 's'} ${_missedToday == 1 ? 'has' : 'have'} already missed its completion window.';
+    } else {
+      headline = 'Today is stable';
+      body = 'Your current day is under control.';
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(top: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF17171A),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF232329)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildSectionTitle(
+            'Day status',
+            subtitle: 'What the current day still allows.',
+          ),
+          Text(
+            headline,
+            style: const TextStyle(
+              color: Color(0xFFF5F5F5),
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            body,
+            style: const TextStyle(
+              color: Color(0xFFB3B3BB),
+              fontSize: 14,
+              height: 1.45,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWeekStatusCard() {
+    String headline;
+    String body;
+
+    if (_totalThisWeek == 0) {
+      headline = 'No weekly commitments';
+      body = 'There are no scheduled tasks recorded for this week.';
+    } else if (_remainingThisWeek > 0) {
+      headline = 'The week is still recoverable';
+      body =
+          'You have completed $_doneThisWeek of $_totalThisWeek weekly commitments, and $_remainingThisWeek ${_remainingThisWeek == 1 ? 'still remains' : 'still remain'} recoverable.';
+    } else if (_missedThisWeek > 0) {
+      headline = 'This week has unrecovered losses';
+      body =
+          '$_missedThisWeek task${_missedThisWeek == 1 ? '' : 's'} ${_missedThisWeek == 1 ? 'was' : 'were'} missed this week, with no remaining weekly commitments left to offset them.';
+    } else {
+      headline = 'The week is under control';
+      body = 'Your weekly commitments are being handled cleanly so far.';
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(top: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF17171A),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF232329)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildSectionTitle(
+            'Week status',
+            subtitle: 'How much of the current week is still recoverable.',
+          ),
+          Text(
+            headline,
+            style: const TextStyle(
+              color: Color(0xFFF5F5F5),
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            body,
+            style: const TextStyle(
+              color: Color(0xFFB3B3BB),
+              fontSize: 14,
+              height: 1.45,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSummaryGrid() {
     return Container(
       margin: const EdgeInsets.only(top: 14),
@@ -507,7 +639,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: _buildMetricChip(
-                  label: 'Upcoming Today',
+                  label: 'Coming Later',
                   value: '$_upcomingToday',
                 ),
               ),
@@ -543,7 +675,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: _buildMetricChip(
-                  label: 'Remaining Week',
+                  label: 'Recoverable Week',
                   value: '$_remainingThisWeek',
                 ),
               ),
@@ -575,18 +707,24 @@ class _ProgressScreenState extends State<ProgressScreen> {
   Widget _buildInsightCard() {
     String message;
 
-    if (_currentStreak >= 7) {
-      message = 'You are building real momentum. Protect the streak.';
+    if (_currentStreak >= 7 && _availableNowToday > 0) {
+      message =
+          'You are building real momentum. Protect the streak by executing the next available commitment now.';
     } else if (_availableNowToday > 0) {
-      message = 'You have habits available right now. Executing one will move the day forward.';
+      message =
+          'You have habits available right now. Executing one will immediately improve today’s recovery picture.';
     } else if (_doneToday > 0 && _upcomingToday > 0) {
-      message = 'You already made progress today, and more is still scheduled ahead.';
+      message =
+          'You already made progress today, and more commitments are still scheduled ahead. Protect the rhythm.';
     } else if (_upcomingToday > 0) {
-      message = 'More work is still coming later today. Stay ready for the next slot.';
+      message =
+          'More work is still coming later today. Stay ready for the next execution window.';
+    } else if (_missedToday > 0 && _remainingThisWeek > 0) {
+      message =
+          'Some of today has already slipped, but the week is still recoverable. Use the remaining commitments well.';
     } else if (_doneToday > 0) {
-      message = 'Today already has momentum. Finish strong and protect consistency.';
-    } else if (_missedToday > 0) {
-      message = 'Some of today has already slipped. Recover the remaining windows where possible.';
+      message =
+          'Today already has momentum. Finish strong and protect consistency.';
     } else {
       message = 'No active tasks recorded for today yet.';
     }
@@ -656,6 +794,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
             _buildTopCard(),
             const SizedBox(height: 18),
             _buildSummaryGrid(),
+            _buildDayStatusCard(),
             _buildProgressBar(
               title: 'Today completion',
               subtitle: 'Completed out of everything scheduled for today.',
@@ -663,10 +802,23 @@ class _ProgressScreenState extends State<ProgressScreen> {
               trailingText: '${(_todayCompletionRate * 100).round()}%',
             ),
             _buildProgressBar(
+              title: 'Today recoverability',
+              subtitle: 'Done plus still-recoverable work out of today’s total.',
+              value: _todayRecoverabilityRate,
+              trailingText: '${(_todayRecoverabilityRate * 100).round()}%',
+            ),
+            _buildWeekStatusCard(),
+            _buildProgressBar(
               title: 'Weekly completion',
               subtitle: 'Completed out of everything scheduled for this week.',
               value: _weekCompletionRate,
               trailingText: '${(_weekCompletionRate * 100).round()}%',
+            ),
+            _buildProgressBar(
+              title: 'Weekly recoverability',
+              subtitle: 'Done plus remaining recoverable work for this week.',
+              value: _weekRecoverabilityRate,
+              trailingText: '${(_weekRecoverabilityRate * 100).round()}%',
             ),
             _buildInsightCard(),
           ],
