@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:achievr_app/Services/app_clock.dart';
 import 'package:achievr_app/Screens/Dashboard/today_screen.dart';
 import 'package:achievr_app/Screens/Dashboard/upcoming_screen.dart';
-import 'package:achievr_app/Screens/Dashboard/goals_screen.dart';
+import 'package:achievr_app/Screens/Dashboard/bright_screen.dart';
 import 'package:achievr_app/Screens/Dashboard/progress_screen.dart';
-import 'package:achievr_app/Screens/Dashboard/more_screen.dart';
+import 'package:achievr_app/Screens/Dashboard/social_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -20,9 +20,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Widget> get _pages => [
         TodayScreen(key: ValueKey('today_$_screenVersion')),
         UpcomingScreen(key: ValueKey('upcoming_$_screenVersion')),
-        GoalsScreen(key: ValueKey('goals_$_screenVersion')),
+        BrightScreen(key: ValueKey('bright_$_screenVersion')),
         ProgressScreen(key: ValueKey('progress_$_screenVersion')),
-        MoreScreen(key: ValueKey('more_$_screenVersion')),
+        SocialScreen(key: ValueKey('social_$_screenVersion')),
       ];
 
   void _refreshAllTabs() {
@@ -58,7 +58,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         onPrimary: Colors.black,
                         surface: Color(0xFF17171A),
                         onSurface: Color(0xFFF5F5F5),
-                      ), dialogTheme: DialogThemeData(backgroundColor: const Color(0xFF17171A)),
+                      ),
+                      dialogTheme: const DialogThemeData(
+                        backgroundColor: Color(0xFF17171A),
+                      ),
                     ),
                     child: child!,
                   );
@@ -116,12 +119,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
               }
             }
 
-            String formattedDate =
+            final formattedDate =
                 '${selected.year.toString().padLeft(4, '0')}-'
                 '${selected.month.toString().padLeft(2, '0')}-'
                 '${selected.day.toString().padLeft(2, '0')}';
 
-            String formattedTime =
+            final formattedTime =
                 '${selected.hour.toString().padLeft(2, '0')}:'
                 '${selected.minute.toString().padLeft(2, '0')}';
 
@@ -339,14 +342,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               fontWeight: FontWeight.w500,
               letterSpacing: 0.1,
             ),
-            selectedIconTheme: const IconThemeData(
-              size: 22,
-              opacity: 1,
-            ),
-            unselectedIconTheme: const IconThemeData(
-              size: 22,
-              opacity: 1,
-            ),
+            selectedIconTheme: const IconThemeData(size: 22, opacity: 1),
+            unselectedIconTheme: const IconThemeData(size: 22, opacity: 1),
             showUnselectedLabels: true,
             items: const [
               BottomNavigationBarItem(
@@ -360,9 +357,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 label: 'Upcoming',
               ),
               BottomNavigationBarItem(
-                icon: Icon(Icons.flag_outlined),
-                activeIcon: Icon(Icons.flag),
-                label: 'Goals',
+                icon: Icon(Icons.auto_awesome_outlined),
+                activeIcon: Icon(Icons.auto_awesome),
+                label: 'Bright',
               ),
               BottomNavigationBarItem(
                 icon: Icon(Icons.bar_chart_outlined),
@@ -370,9 +367,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 label: 'Progress',
               ),
               BottomNavigationBarItem(
-                icon: Icon(Icons.grid_view_outlined),
-                activeIcon: Icon(Icons.grid_view),
-                label: 'More',
+                icon: Icon(Icons.groups_outlined),
+                activeIcon: Icon(Icons.groups),
+                label: 'Social',
               ),
             ],
           ),

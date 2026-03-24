@@ -405,14 +405,6 @@ class _TodayScreenState extends State<TodayScreen> {
       .toList()
     ..sort(_compareLogsByStartTime);
 
-  List<Map<String, dynamic>> get _comingUpLogs => todayLogs
-      .where((log) {
-        final state = _taskState(log);
-        return state == 'soon' || state == 'upcoming';
-      })
-      .toList()
-    ..sort(_compareLogsByStartTime);
-
   List<Map<String, dynamic>> get _completedLogs => todayLogs
       .where((log) => _taskState(log) == 'done')
       .toList()
@@ -431,12 +423,12 @@ class _TodayScreenState extends State<TodayScreen> {
 
     for (final log in pendingLogs) {
       final state = _taskState(log);
-      if (state == 'available' || state == 'soon' || state == 'upcoming') {
+      if (state == 'soon' || state == 'upcoming') {
         return log;
       }
     }
 
-    return pendingLogs.isNotEmpty ? pendingLogs.first : null;
+    return null;
   }
 
   String _timeUntil(DateTime start) {
@@ -464,27 +456,6 @@ class _TodayScreenState extends State<TodayScreen> {
   String _nextTaskMessage(Map<String, dynamic> log) {
     final state = _taskState(log);
     final start = _logStartDateTime(log);
-    final end = _logEndDateTime(log);
-
-    if (state == 'available') {
-      if (end != null) {
-        final latestAllowed = end.add(_gracePeriod);
-        final remaining = latestAllowed.difference(_screenNow);
-
-        if (!remaining.isNegative) {
-          final hours = remaining.inHours;
-          final minutes = remaining.inMinutes % 60;
-
-          if (hours > 0) {
-            return 'Execution window is open. Closes in ${hours}h ${minutes}m.';
-          }
-          if (minutes > 0) {
-            return 'Execution window is open. Closes in ${minutes}m.';
-          }
-        }
-      }
-      return 'Execution window is open now.';
-    }
 
     if (state == 'soon' || state == 'upcoming') {
       return start != null ? _timeUntil(start) : 'Scheduled for later today';
@@ -671,10 +642,10 @@ class _TodayScreenState extends State<TodayScreen> {
           children: [
             _buildSectionTitle(
               'Next task',
-              subtitle: 'Your next priority for today.',
+              subtitle: 'Your next scheduled commitment.',
             ),
             const Text(
-              'All scheduled habits are complete for today.',
+              'No upcoming tasks remain for today.',
               style: TextStyle(
                 color: Color(0xFFB3B3BB),
                 fontSize: 14,
@@ -687,7 +658,6 @@ class _TodayScreenState extends State<TodayScreen> {
 
     final habit = nextTask['habits'] as Map<String, dynamic>?;
     final goal = habit?['goals'] as Map<String, dynamic>?;
-    final start = _logStartDateTime(nextTask);
     final verificationType =
         (nextTask['verification_type'] ?? 'manual').toString();
     final state = _taskState(nextTask);
@@ -717,7 +687,7 @@ class _TodayScreenState extends State<TodayScreen> {
           children: [
             _buildSectionTitle(
               'Next task',
-              subtitle: 'Your next priority for today.',
+              subtitle: 'Your next scheduled commitment.',
             ),
             Row(
               children: [
@@ -789,13 +759,6 @@ class _TodayScreenState extends State<TodayScreen> {
                 fontSize: 12,
               ),
             ),
-            if (state == 'available' && verificationType == 'manual') ...[
-              const SizedBox(height: 14),
-              Align(
-                alignment: Alignment.centerRight,
-                child: _buildActionButtonForLog(nextTask),
-              ),
-            ],
           ],
         ),
       ),
@@ -1090,6 +1053,8 @@ class _TodayScreenState extends State<TodayScreen> {
       );
     }
 
+    final hasAvailableNow = _availableLogs.isNotEmpty;
+
     return HoldToRefreshWrapper(
       onRefresh: _loadTodayData,
       child: SingleChildScrollView(
@@ -1101,29 +1066,17 @@ class _TodayScreenState extends State<TodayScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _buildTopHero(),
+            if (hasAvailableNow) ...[
+              const SizedBox(height: 18),
+              _buildTaskSection(
+                title: 'Available now',
+                subtitle: 'These commitments can be executed right now.',
+                logs: _availableLogs,
+                emptyText: '',
+              ),
+            ],
             const SizedBox(height: 18),
             _buildNextTaskCard(),
-            const SizedBox(height: 18),
-            _buildTaskSection(
-              title: 'Available now',
-              subtitle: 'These commitments can be executed right now.',
-              logs: _availableLogs,
-              emptyText: 'No tasks are currently available.',
-            ),
-            const SizedBox(height: 18),
-            _buildTaskSection(
-              title: 'Coming up',
-              subtitle: 'These are the next commitments later today.',
-              logs: _comingUpLogs,
-              emptyText: 'No more upcoming tasks for today.',
-            ),
-            const SizedBox(height: 18),
-            _buildTaskSection(
-              title: 'Completed',
-              subtitle: 'These commitments are already finished.',
-              logs: _completedLogs,
-              emptyText: 'Nothing completed yet today.',
-            ),
             const SizedBox(height: 18),
             _buildTaskSection(
               title: 'Missed / expired',

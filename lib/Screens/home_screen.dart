@@ -703,7 +703,6 @@ class _AuthSignupDialogState extends State<_AuthSignupDialog> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _phoneController = TextEditingController();
 
   bool _isLoading = false;
   String? _error;
@@ -752,7 +751,6 @@ class _AuthSignupDialogState extends State<_AuthSignupDialog> {
     final username = _usernameController.text.trim();
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
-    final phone = _phoneController.text.trim();
 
     if (username.isEmpty) {
       setState(() => _error = 'Username is required.');
@@ -789,9 +787,9 @@ class _AuthSignupDialogState extends State<_AuthSignupDialog> {
         return;
       }
 
-      await widget.supabase.from('profiles').update({
+      await widget.supabase.from('profiles').upsert({
+        'id': user.id,
         'username': username,
-        'phone_number': phone.isEmpty ? null : phone,
         'timezone': 'UTC',
         'plan_tier': _selectedPlan,
         'strict_mode_enabled': _strictModeEnabled,
@@ -799,7 +797,7 @@ class _AuthSignupDialogState extends State<_AuthSignupDialog> {
         'sleep_time': _timeToDbString(_sleepTime),
         'setup_completed': false,
         'onboarding_step': 1,
-      }).eq('id', user.id);
+      });
 
       if (!mounted) return;
 
@@ -924,7 +922,6 @@ class _AuthSignupDialogState extends State<_AuthSignupDialog> {
     _usernameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
-    _phoneController.dispose();
     super.dispose();
   }
 
@@ -979,12 +976,6 @@ class _AuthSignupDialogState extends State<_AuthSignupDialog> {
                   decoration: _inputDecoration('Password'),
                 ),
                 const SizedBox(height: 14),
-                TextField(
-                  controller: _phoneController,
-                  keyboardType: TextInputType.phone,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: _inputDecoration('Phone number'),
-                ),
                 const SizedBox(height: 18),
                 Container(
                   padding: const EdgeInsets.all(14),
