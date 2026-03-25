@@ -34,7 +34,8 @@ class _VerificationSettingsScreenState
     });
 
     try {
-      final habits = await _verificationService.fetchMyActiveHabitsForVerification();
+      final habits =
+          await _verificationService.fetchMyActiveHabitsForVerification();
       final friends = await _friendsService.fetchAcceptedFriendProfiles();
 
       if (!mounted) return;
@@ -71,16 +72,17 @@ class _VerificationSettingsScreenState
 
   Future<void> _changeVerificationType(
     String habitId,
+    String currentType,
     String newType,
   ) async {
-    try {
-      await _verificationService.updateHabitVerificationType(
-        habitId: habitId,
-        verificationType: newType,
-      );
+    if (newType == currentType) return;
 
+    try {
       if (newType == 'manual') {
-        await _verificationService.removeVerifierFromHabit(habitId: habitId);
+        await _verificationService.switchHabitToManual(habitId: habitId);
+      } else if (newType == 'partner') {
+        await _pickVerifierForHabit(habitId);
+        return;
       }
 
       await _loadData();
@@ -102,7 +104,9 @@ class _VerificationSettingsScreenState
   Future<void> _pickVerifierForHabit(String habitId) async {
     if (_friends.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Add a friend first before assigning a verifier.')),
+        const SnackBar(
+          content: Text('Add a friend first before assigning a verifier.'),
+        ),
       );
       return;
     }
@@ -134,7 +138,8 @@ class _VerificationSettingsScreenState
                   final otherProfile =
                       friend['other_profile'] as Map<String, dynamic>?;
                   final otherUserId = friend['other_user_id'].toString();
-                  final username = (otherProfile?['username'] ?? 'Unknown').toString();
+                  final username =
+                      (otherProfile?['username'] ?? 'Unknown').toString();
 
                   return Container(
                     margin: const EdgeInsets.only(top: 10),
@@ -184,11 +189,6 @@ class _VerificationSettingsScreenState
         verifierUserId: selected,
       );
 
-      await _verificationService.updateHabitVerificationType(
-        habitId: habitId,
-        verificationType: 'partner',
-      );
-
       await _loadData();
 
       if (!mounted) return;
@@ -205,10 +205,30 @@ class _VerificationSettingsScreenState
     }
   }
 
+  Future<void> _removeVerifierAndSwitchToManual(String habitId) async {
+    try {
+      await _verificationService.switchHabitToManual(habitId: habitId);
+      await _loadData();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Verifier removed. Habit is now manual.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove verifier: $e')),
+      );
+    }
+  }
+
   Widget _buildHabitCard(Map<String, dynamic> habit) {
     final goal = habit['goal'] as Map<String, dynamic>?;
     final verifier = habit['verifier'] as Map<String, dynamic>?;
-    final verificationType = (habit['verification_type'] ?? 'manual').toString();
+    final verificationType =
+        (habit['verification_type'] ?? 'manual').toString();
     final verifierUserId = verifier?['verifier_user_id']?.toString();
 
     return Container(
@@ -259,7 +279,11 @@ class _VerificationSettingsScreenState
             ],
             onChanged: (value) {
               if (value == null) return;
-              _changeVerificationType(habit['habit_id'].toString(), value);
+              _changeVerificationType(
+                habit['habit_id'].toString(),
+                verificationType,
+                value,
+              );
             },
           ),
           const SizedBox(height: 12),
@@ -276,7 +300,8 @@ class _VerificationSettingsScreenState
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () => _pickVerifierForHabit(habit['habit_id'].toString()),
+                    onPressed: () =>
+                        _pickVerifierForHabit(habit['habit_id'].toString()),
                     style: OutlinedButton.styleFrom(
                       side: const BorderSide(color: Color(0xFF3A3A42)),
                       foregroundColor: const Color(0xFFF5F5F5),
@@ -287,26 +312,9 @@ class _VerificationSettingsScreenState
                 const SizedBox(width: 10),
                 Expanded(
                   child: TextButton(
-                    onPressed: () async {
-                      try {
-                        await _verificationService.removeVerifierFromHabit(
-                          habitId: habit['habit_id'].toString(),
-                        );
-                        await _loadData();
-
-                        if (!mounted) return;
-
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Verifier removed.')),
-                        );
-                      } catch (e) {
-                        if (!mounted) return;
-
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Failed to remove verifier: $e')),
-                        );
-                      }
-                    },
+                    onPressed: () => _removeVerifierAndSwitchToManual(
+                      habit['habit_id'].toString(),
+                    ),
                     child: const Text(
                       'Remove',
                       style: TextStyle(color: Color(0xFFFF8A80)),

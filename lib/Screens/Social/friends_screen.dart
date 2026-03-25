@@ -1,3 +1,5 @@
+// ignore_for_file: unused_local_variable
+
 import 'package:achievr_app/Services/friends_service.dart';
 import 'package:flutter/material.dart';
 
@@ -69,6 +71,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
     final otherProfile = friendship['other_profile'] as Map<String, dynamic>?;
     final otherUserId = friendship['other_user_id'].toString();
     final username = (otherProfile?['username'] ?? 'Unknown').toString();
+    final publicHandle = (otherProfile?['public_handle'] ?? '').toString();
 
     return Container(
       margin: const EdgeInsets.only(top: 10),
@@ -113,7 +116,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  otherUserId,
+                  publicHandle.isNotEmpty ? '@$publicHandle' : otherUserId,
                   style: const TextStyle(
                     color: Color(0xFF7C7C84),
                     fontSize: 11,

@@ -747,74 +747,85 @@ class _AuthSignupDialogState extends State<_AuthSignupDialog> {
     return '$hour:$minute $suffix';
   }
 
-  Future<void> _signup() async {
-    final username = _usernameController.text.trim();
-    final email = _emailController.text.trim();
-    final password = _passwordController.text.trim();
+Future<void> _signup() async {
+  final username = _usernameController.text.trim();
+  final email = _emailController.text.trim();
+  final password = _passwordController.text.trim();
 
-    if (username.isEmpty) {
-      setState(() => _error = 'Username is required.');
+  if (username.isEmpty) {
+    setState(() => _error = 'Username is required.');
+    return;
+  }
+
+  if (email.isEmpty || password.isEmpty) {
+    setState(() => _error = 'Email and password are required.');
+    return;
+  }
+
+  if (password.length < 6) {
+    setState(() => _error = 'Password must be at least 6 characters.');
+    return;
+  }
+
+  setState(() {
+    _isLoading = true;
+    _error = null;
+  });
+
+  try {
+    final response = await widget.supabase.auth.signUp(
+      email: email,
+      password: password,
+      data: {
+        'username': username,
+      },
+    );
+
+    final user = response.user;
+    if (user == null) {
+      setState(() => _error = 'Signup failed. Try again.');
       return;
     }
 
-    if (email.isEmpty || password.isEmpty) {
-      setState(() => _error = 'Email and password are required.');
-      return;
-    }
+    final cleanBase = username
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9_]'), '')
+        .replaceAll(RegExp(r'_+'), '_');
 
-    if (password.length < 6) {
-      setState(() => _error = 'Password must be at least 6 characters.');
-      return;
-    }
+    final safeBase = cleanBase.isEmpty ? 'user' : cleanBase;
+    final shortCode =
+        user.id.replaceAll('-', '').substring(0, 4).toUpperCase();
+    final publicHandle = '${safeBase}_$shortCode';
 
-    setState(() {
-      _isLoading = true;
-      _error = null;
+    await widget.supabase.from('profiles').upsert({
+      'id': user.id,
+      'username': username,
+      'public_handle': publicHandle,
+      'timezone': 'UTC',
+      'plan_tier': _selectedPlan,
+      'strict_mode_enabled': _strictModeEnabled,
+      'wake_time': _timeToDbString(_wakeTime),
+      'sleep_time': _timeToDbString(_sleepTime),
+      'setup_completed': false,
+      'onboarding_step': 1,
     });
 
-    try {
-      final response = await widget.supabase.auth.signUp(
-        email: email,
-        password: password,
-        data: {
-          'username': username,
-        },
-      );
+    if (!mounted) return;
 
-      final user = response.user;
-      if (user == null) {
-        setState(() => _error = 'Signup failed. Try again.');
-        return;
-      }
-
-      await widget.supabase.from('profiles').upsert({
-        'id': user.id,
-        'username': username,
-        'timezone': 'UTC',
-        'plan_tier': _selectedPlan,
-        'strict_mode_enabled': _strictModeEnabled,
-        'wake_time': _timeToDbString(_wakeTime),
-        'sleep_time': _timeToDbString(_sleepTime),
-        'setup_completed': false,
-        'onboarding_step': 1,
-      });
-
-      if (!mounted) return;
-
-      Navigator.of(context).pop();
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const GoalSetupIntroScreen()),
-      );
-    } on AuthException catch (e) {
-      setState(() => _error = e.message);
-    } catch (e) {
-      setState(() => _error = 'Unexpected error: $e');
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+    Navigator.of(context).pop();
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const GoalSetupIntroScreen()),
+    );
+  } on AuthException catch (e) {
+    setState(() => _error = e.message);
+  } catch (e) {
+    setState(() => _error = 'Unexpected error: $e');
+  } finally {
+    if (mounted) {
+      setState(() => _isLoading = false);
     }
   }
+}
 
   InputDecoration _inputDecoration(String hint) {
     return InputDecoration(

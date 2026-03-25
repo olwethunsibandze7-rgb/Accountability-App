@@ -43,7 +43,9 @@ class VerificationService {
 
     for (final habit in habits) {
       final goalId = habit['goal_id'].toString();
-      final verifier = await fetchHabitVerifier(habitId: habit['habit_id'].toString());
+      final verifier = await fetchHabitVerifier(
+        habitId: habit['habit_id'].toString(),
+      );
 
       results.add({
         ...habit,
@@ -63,6 +65,12 @@ class VerificationService {
         .from('habits')
         .update({'verification_type': verificationType})
         .eq('habit_id', habitId);
+
+    await _supabase
+        .from('habit_logs')
+        .update({'verification_type': verificationType})
+        .eq('habit_id', habitId)
+        .inFilter('status', ['pending', 'awaiting_verification']);
   }
 
   Future<void> assignVerifierToHabit({
@@ -77,12 +85,34 @@ class VerificationService {
       'assigned_by_user_id': userId,
       'active': true,
     });
+
+    await updateHabitVerificationType(
+      habitId: habitId,
+      verificationType: 'partner',
+    );
+  }
+
+  Future<void> switchHabitToManual({
+    required String habitId,
+  }) async {
+    await _supabase
+        .from('habit_verifiers')
+        .delete()
+        .eq('habit_id', habitId);
+
+    await updateHabitVerificationType(
+      habitId: habitId,
+      verificationType: 'manual',
+    );
   }
 
   Future<void> removeVerifierFromHabit({
     required String habitId,
   }) async {
-    await _supabase.from('habit_verifiers').delete().eq('habit_id', habitId);
+    await _supabase
+        .from('habit_verifiers')
+        .delete()
+        .eq('habit_id', habitId);
   }
 
   Future<Map<String, dynamic>?> fetchHabitVerifier({
@@ -173,10 +203,10 @@ class VerificationService {
       'note': note,
     });
 
-    await _supabase
-        .from('habit_logs')
-        .update({'status': 'awaiting_verification'})
-        .eq('log_id', logId);
+    await _supabase.from('habit_logs').update({
+      'status': 'awaiting_verification',
+      'verification_type': 'partner',
+    }).eq('log_id', logId);
   }
 
   Future<void> approveVerificationRequest({
@@ -191,7 +221,10 @@ class VerificationService {
         })
         .eq('request_id', requestId);
 
-    await _supabase.from('habit_logs').update({'status': 'done'}).eq('log_id', logId);
+    await _supabase.from('habit_logs').update({
+      'status': 'done',
+      'closed_at': DateTime.now().toIso8601String(),
+    }).eq('log_id', logId);
   }
 
   Future<void> rejectVerificationRequest({
@@ -206,9 +239,9 @@ class VerificationService {
         })
         .eq('request_id', requestId);
 
-    await _supabase
-        .from('habit_logs')
-        .update({'status': 'pending'})
-        .eq('log_id', logId);
+    await _supabase.from('habit_logs').update({
+      'status': 'pending',
+      'verification_type': 'partner',
+    }).eq('log_id', logId);
   }
 }

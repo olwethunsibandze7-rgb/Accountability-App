@@ -11,32 +11,29 @@ class FriendsService {
     return user.id;
   }
 
-  Future<Map<String, dynamic>?> fetchProfileBasic(String userId) async {
-    final response = await _supabase
-        .from('profiles')
-        .select('id, username')
-        .eq('id', userId)
-        .maybeSingle();
+Future<Map<String, dynamic>?> fetchProfileBasic(String userId) async {
+  final response = await _supabase
+      .from('profiles')
+      .select('id, username, public_handle')
+      .eq('id', userId)
+      .maybeSingle();
 
-    if (response == null) return null;
-    return Map<String, dynamic>.from(response);
-  }
+  if (response == null) return null;
+  return Map<String, dynamic>.from(response);
+}
 
-  Future<List<Map<String, dynamic>>> searchUsersByUsername(String query) async {
-    final userId = _userId;
-    final trimmed = query.trim();
+Future<List<Map<String, dynamic>>> searchUsersByUsername(String query) async {
+  final trimmed = query.trim();
 
-    if (trimmed.isEmpty) return [];
+  if (trimmed.isEmpty) return [];
 
-    final response = await _supabase
-        .from('profiles')
-        .select('id, username')
-        .ilike('username', '%$trimmed%')
-        .neq('id', userId)
-        .limit(20);
+  final response = await _supabase.rpc(
+    'search_profiles',
+    params: {'search_text': trimmed},
+  );
 
-    return List<Map<String, dynamic>>.from(response);
-  }
+  return List<Map<String, dynamic>>.from(response);
+}
 
   Future<List<Map<String, dynamic>>> fetchAllFriendships() async {
     final userId = _userId;

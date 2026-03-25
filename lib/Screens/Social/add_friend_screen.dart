@@ -90,6 +90,7 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
 
   Widget _buildResultCard(Map<String, dynamic> profile) {
     final username = (profile['username'] ?? 'Unknown').toString();
+    final publicHandle = (profile['public_handle'] ?? '').toString();
     final userId = profile['id'].toString();
 
     return Container(
@@ -121,29 +122,29 @@ class _AddFriendScreenState extends State<AddFriendScreen> {
             ),
           ),
           const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  username,
-                  style: const TextStyle(
-                    color: Color(0xFFF5F5F5),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    username,
+                    style: const TextStyle(
+                      color: Color(0xFFF5F5F5),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  userId,
-                  style: const TextStyle(
-                    color: Color(0xFF7C7C84),
-                    fontSize: 11,
+                  const SizedBox(height: 4),
+                  Text(
+                    publicHandle.isNotEmpty ? '@$publicHandle' : userId,
+                    style: const TextStyle(
+                      color: Color(0xFF9A9AA3),
+                      fontSize: 12,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
           ElevatedButton(
             onPressed: () => _sendRequest(userId),
             style: ElevatedButton.styleFrom(
