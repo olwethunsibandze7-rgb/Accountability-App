@@ -2,10 +2,14 @@
 
 import 'dart:async';
 
+import 'package:achievr_app/Screens/Dashboard/focus_mode_screen.dart';
 import 'package:achievr_app/Screens/habit_log_service.dart';
 import 'package:achievr_app/Services/app_clock.dart';
+import 'package:achievr_app/Services/location_runtime_service.dart';
+import 'package:achievr_app/Services/verification_service.dart';
 import 'package:achievr_app/Widgets/hold_to_refresh_wrapper.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class TodayScreen extends StatefulWidget {
@@ -18,12 +22,17 @@ class TodayScreen extends StatefulWidget {
 class _TodayScreenState extends State<TodayScreen> {
   final SupabaseClient supabase = Supabase.instance.client;
   final HabitLogService _habitLogService = HabitLogService();
+  final VerificationService _verificationService = VerificationService();
+  final LocationRuntimeService _locationRuntimeService =
+      LocationRuntimeService();
 
   Map<String, dynamic>? profile;
   List<Map<String, dynamic>> todayLogs = [];
 
   bool _isLoading = true;
   bool _isUpdatingLog = false;
+  bool _isSubmittingVerification = false;
+  bool _isPreparingLocation = false;
   String? _error;
 
   Timer? _clockTimer;
@@ -113,6 +122,7 @@ class _TodayScreenState extends State<TodayScreen> {
           .maybeSingle();
 
       await _habitLogService.generateTodayLogs();
+      await _habitLogService.expireOverdueTodayLogs();
 
       final logs = await _habitLogService.fetchTodayLogs()
         ..sort(_compareLogsByStartTime);
@@ -134,6 +144,40 @@ class _TodayScreenState extends State<TodayScreen> {
         _error = 'Failed to load today screen:\n$e';
         _isLoading = false;
       });
+    }
+  }
+
+  Future<Position> _requireCurrentPosition() async {
+    setState(() {
+      _isPreparingLocation = true;
+    });
+
+    try {
+      final enabled = await _locationRuntimeService.isServiceEnabled();
+      if (!enabled) {
+        throw Exception('Location services are disabled.');
+      }
+
+      var permission = await _locationRuntimeService.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await _locationRuntimeService.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied) {
+        throw Exception('Location permission denied.');
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        throw Exception('Location permission denied forever. Open app settings.');
+      }
+
+      return await _locationRuntimeService.getCurrentPosition();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isPreparingLocation = false;
+        });
+      }
     }
   }
 
@@ -174,6 +218,204 @@ class _TodayScreenState extends State<TodayScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to mark habit as done.')),
       );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUpdatingLog = false;
+        });
+      }
+    }
+  }
+
+    Future<void> _openFocusMode(Map<String, dynamic> log) async {
+      final status = (log['status'] ?? '').toString();
+
+      const blockedStatuses = {
+        'done',
+        'failed',
+        'missed',
+        'rejected',
+        'submitted',
+      };
+
+      if (blockedStatuses.contains(status)) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'This task is already closed with status: $status.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => FocusModeScreen(log: log),
+        ),
+      );
+
+      if (!mounted) return;
+      await _loadTodayData();
+    }
+
+  Future<void> _submitPartnerVerification(Map<String, dynamic> log) async {
+    final logId = log['log_id']?.toString();
+    final habitId = _extractHabitId(log);
+    final verificationType = _verificationType(log);
+
+    if (logId == null || habitId == null) return;
+
+    final availability = _manualCompletionAvailability(log);
+    if (!availability.canCompleteNow) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(availability.message)),
+      );
+      return;
+    }
+
+    final bool requiresLocation = verificationType == 'location_partner' ||
+        verificationType == 'location_focus_partner';
+
+    final noteController = TextEditingController();
+
+    final bool? confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF17171A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) {
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            16,
+            16,
+            MediaQuery.of(context).viewInsets.bottom + 20,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Submit for verification',
+                  style: TextStyle(
+                    color: Color(0xFFF5F5F5),
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  requiresLocation
+                      ? 'This task requires partner review and live location.'
+                      : 'This task will be sent to your assigned verifier.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFFB3B3BB),
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: noteController,
+                  maxLines: 3,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Optional note',
+                    labelStyle: const TextStyle(color: Colors.white70),
+                    filled: true,
+                    fillColor: const Color(0xFF101013),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+                if (requiresLocation) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF101013),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF232329)),
+                    ),
+                    child: const Text(
+                      'Your current GPS location will be captured when you submit.',
+                      style: TextStyle(
+                        color: Color(0xFFB3B3BB),
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFF5F5F5),
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    child: const Text('Submit'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+
+    Position? position;
+
+    try {
+      setState(() {
+        _isSubmittingVerification = true;
+      });
+
+      if (requiresLocation) {
+        position = await _requireCurrentPosition();
+      }
+
+      await _verificationService.submitLogForVerification(
+        logId: logId,
+        habitId: habitId,
+        note: noteController.text.trim().isEmpty
+            ? null
+            : noteController.text.trim(),
+        currentLatitude: position?.latitude,
+        currentLongitude: position?.longitude,
+      );
+
+      await _loadTodayData();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Submitted for verification.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to submit verification: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmittingVerification = false;
+        });
+      }
     }
   }
 
@@ -311,7 +553,12 @@ class _TodayScreenState extends State<TodayScreen> {
 
   String _taskState(Map<String, dynamic> log) {
     final rawStatus = (log['status'] ?? 'pending').toString();
+
     if (rawStatus == 'done') return 'done';
+    if (rawStatus == 'pending_verification') return 'pending_verification';
+    if (rawStatus == 'submitted') return 'submitted';
+    if (rawStatus == 'rejected') return 'rejected';
+    if (rawStatus == 'failed') return 'failed';
 
     final start = _logStartDateTime(log);
     final end = _logEndDateTime(log);
@@ -344,6 +591,14 @@ class _TodayScreenState extends State<TodayScreen> {
         return 'Upcoming';
       case 'missed':
         return 'Missed';
+      case 'pending_verification':
+        return 'Pending review';
+      case 'submitted':
+        return 'Submitted';
+      case 'rejected':
+        return 'Rejected';
+      case 'failed':
+        return 'Failed';
       default:
         return 'Pending';
     }
@@ -360,7 +615,12 @@ class _TodayScreenState extends State<TodayScreen> {
       case 'upcoming':
         return const Color(0xFFB3B3BB);
       case 'missed':
+      case 'rejected':
+      case 'failed':
         return const Color(0xFFFF8A80);
+      case 'pending_verification':
+      case 'submitted':
+        return const Color(0xFF81D4FA);
       default:
         return const Color(0xFFB3B3BB);
     }
@@ -377,7 +637,12 @@ class _TodayScreenState extends State<TodayScreen> {
       case 'upcoming':
         return const Color(0xFF3A3A42);
       case 'missed':
+      case 'rejected':
+      case 'failed':
         return const Color(0xFFE57373);
+      case 'pending_verification':
+      case 'submitted':
+        return const Color(0xFF4FC3F7);
       default:
         return const Color(0xFF232329);
     }
@@ -394,7 +659,12 @@ class _TodayScreenState extends State<TodayScreen> {
       case 'upcoming':
         return const Color(0xFF101013);
       case 'missed':
+      case 'rejected':
+      case 'failed':
         return const Color(0x22E57373);
+      case 'pending_verification':
+      case 'submitted':
+        return const Color(0x224FC3F7);
       default:
         return const Color(0xFF101013);
     }
@@ -411,19 +681,48 @@ class _TodayScreenState extends State<TodayScreen> {
     ..sort(_compareLogsByStartTime);
 
   List<Map<String, dynamic>> get _missedLogs => todayLogs
-      .where((log) => _taskState(log) == 'missed')
+      .where((log) {
+        final state = _taskState(log);
+        return state == 'missed' || state == 'failed' || state == 'rejected';
+      })
+      .toList()
+    ..sort(_compareLogsByStartTime);
+
+  List<Map<String, dynamic>> get _upcomingLogs => todayLogs
+      .where((log) {
+        final state = _taskState(log);
+        return state == 'soon' || state == 'upcoming';
+      })
+      .toList()
+    ..sort(_compareLogsByStartTime);
+
+  List<Map<String, dynamic>> get _reviewLogs => todayLogs
+      .where((log) {
+        final state = _taskState(log);
+        return state == 'submitted' || state == 'pending_verification';
+      })
       .toList()
     ..sort(_compareLogsByStartTime);
 
   Map<String, dynamic>? get _nextTask {
     final pendingLogs = todayLogs
-        .where((log) => (log['status'] ?? 'pending').toString() != 'done')
+        .where((log) {
+          final state = _taskState(log);
+          return state != 'done' &&
+              state != 'missed' &&
+              state != 'failed' &&
+              state != 'rejected';
+        })
         .toList()
       ..sort(_compareLogsByStartTime);
 
     for (final log in pendingLogs) {
       final state = _taskState(log);
-      if (state == 'soon' || state == 'upcoming') {
+      if (state == 'available' ||
+          state == 'soon' ||
+          state == 'upcoming' ||
+          state == 'submitted' ||
+          state == 'pending_verification') {
         return log;
       }
     }
@@ -457,20 +756,82 @@ class _TodayScreenState extends State<TodayScreen> {
     final state = _taskState(log);
     final start = _logStartDateTime(log);
 
+    if (state == 'available') {
+      return 'This task is available to execute now.';
+    }
+
+    if (state == 'submitted' || state == 'pending_verification') {
+      return 'This task is waiting for verifier review.';
+    }
+
     if (state == 'soon' || state == 'upcoming') {
       return start != null ? _timeUntil(start) : 'Scheduled for later today';
     }
 
-    if (state == 'missed') {
-      return 'This task was missed. Recover the next available commitment.';
+    if (state == 'missed' || state == 'failed') {
+      return 'This task did not clear its execution window.';
     }
 
     return 'Scheduled for today';
   }
 
   int get _doneCount => _completedLogs.length;
-  int get _pendingCount =>
-      todayLogs.where((log) => _taskState(log) != 'done').length;
+  int get _pendingCount => todayLogs.where((log) {
+        final state = _taskState(log);
+        return state != 'done' && state != 'missed' && state != 'failed';
+      }).length;
+
+  String _verificationType(Map<String, dynamic> log) {
+    return (log['verification_type'] ?? 'manual').toString();
+  }
+
+  String? _extractHabitId(Map<String, dynamic> log) {
+    final habit = log['habits'];
+
+    if (habit is Map<String, dynamic>) {
+      return habit['habit_id']?.toString();
+    }
+
+    if (habit is Map) {
+      return habit['habit_id']?.toString();
+    }
+
+    return log['habit_id']?.toString();
+  }
+
+  bool _isFocusVerification(String type) {
+    return type == 'focus_auto' ||
+        type == 'focus_partner' ||
+        type == 'location_focus' ||
+        type == 'location_focus_partner';
+  }
+
+  bool _isPartnerOnlyVerification(String type) {
+    return type == 'partner' || type == 'location_partner';
+  }
+
+  String _verificationLabel(String type) {
+    switch (type) {
+      case 'manual':
+        return 'Manual';
+      case 'focus_auto':
+        return 'Focus Auto';
+      case 'partner':
+        return 'Partner Review';
+      case 'focus_partner':
+        return 'Focus + Partner';
+      case 'location':
+        return 'Location';
+      case 'location_focus':
+        return 'Location + Focus';
+      case 'location_partner':
+        return 'Location + Partner';
+      case 'location_focus_partner':
+        return 'Location + Focus + Partner';
+      default:
+        return type.replaceAll('_', ' ');
+    }
+  }
 
   Widget _buildMetricChip({
     required String label,
@@ -658,8 +1019,7 @@ class _TodayScreenState extends State<TodayScreen> {
 
     final habit = nextTask['habits'] as Map<String, dynamic>?;
     final goal = habit?['goals'] as Map<String, dynamic>?;
-    final verificationType =
-        (nextTask['verification_type'] ?? 'manual').toString();
+    final verificationType = _verificationType(nextTask);
     final state = _taskState(nextTask);
 
     return TweenAnimationBuilder<double>(
@@ -717,10 +1077,8 @@ class _TodayScreenState extends State<TodayScreen> {
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 7,
-                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                   decoration: BoxDecoration(
                     color: const Color(0xFF101013),
                     borderRadius: BorderRadius.circular(12),
@@ -753,7 +1111,7 @@ class _TodayScreenState extends State<TodayScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              'Verification: $verificationType',
+              'Verification: ${_verificationLabel(verificationType)}',
               style: const TextStyle(
                 color: Color(0xFF9A9AA3),
                 fontSize: 12,
@@ -767,24 +1125,30 @@ class _TodayScreenState extends State<TodayScreen> {
 
   Widget _buildActionButtonForLog(Map<String, dynamic> log) {
     final status = (log['status'] ?? 'pending').toString();
-    final verificationType = (log['verification_type'] ?? 'manual').toString();
+    final verificationType = _verificationType(log);
+    final state = _taskState(log);
 
     if (status == 'done') {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0x142E7D32),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFF2E7D32)),
-        ),
-        child: const Text(
-          'Done',
-          style: TextStyle(
-            color: Colors.greenAccent,
-            fontWeight: FontWeight.w700,
-            fontSize: 12,
-          ),
-        ),
+      return _buildPassiveActionChip(
+        text: 'Done',
+        color: const Color(0xFF2E7D32),
+        bg: const Color(0x142E7D32),
+      );
+    }
+
+    if (state == 'pending_verification' || state == 'submitted') {
+      return _buildPassiveActionChip(
+        text: 'Awaiting review',
+        color: const Color(0xFF4FC3F7),
+        bg: const Color(0x224FC3F7),
+      );
+    }
+
+    if (state == 'missed' || state == 'failed' || state == 'rejected') {
+      return _buildPassiveActionChip(
+        text: _taskStateLabel(state),
+        color: const Color(0xFFE57373),
+        bg: const Color(0x22E57373),
       );
     }
 
@@ -820,18 +1184,82 @@ class _TodayScreenState extends State<TodayScreen> {
       );
     }
 
+    if (_isFocusVerification(verificationType)) {
+      return ElevatedButton(
+        onPressed: () => _openFocusMode(log),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFFF5F5F5),
+          foregroundColor: Colors.black,
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+        child: const Text(
+          'Focus Mode',
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 12,
+          ),
+        ),
+      );
+    }
+
+    if (_isPartnerOnlyVerification(verificationType)) {
+      return ElevatedButton(
+        onPressed: (_isSubmittingVerification || _isPreparingLocation)
+            ? null
+            : () => _submitPartnerVerification(log),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFFF5F5F5),
+          foregroundColor: Colors.black,
+          disabledBackgroundColor: const Color(0xFF2A2A2F),
+          disabledForegroundColor: const Color(0xFF6F6F76),
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+        child: Text(
+          _isPreparingLocation
+              ? 'Getting GPS...'
+              : _isSubmittingVerification
+                  ? 'Submitting...'
+                  : 'Submit Review',
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 12,
+          ),
+        ),
+      );
+    }
+
+    return _buildPassiveActionChip(
+      text: _verificationLabel(verificationType),
+      color: const Color(0xFF9A9AA3),
+      bg: const Color(0xFF101013),
+    );
+  }
+
+  Widget _buildPassiveActionChip({
+    required String text,
+    required Color color,
+    required Color bg,
+  }) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF101013),
+        color: bg,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF232329)),
+        border: Border.all(color: color),
       ),
       child: Text(
-        verificationType,
-        style: const TextStyle(
-          color: Color(0xFF9A9AA3),
-          fontWeight: FontWeight.w600,
+        text,
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w700,
           fontSize: 12,
         ),
       ),
@@ -844,7 +1272,7 @@ class _TodayScreenState extends State<TodayScreen> {
     final habit = log['habits'] as Map<String, dynamic>?;
     final goal = habit?['goals'] as Map<String, dynamic>?;
     final availability = _manualCompletionAvailability(log);
-    final verificationType = (log['verification_type'] ?? 'manual').toString();
+    final verificationType = _verificationType(log);
     final state = _taskState(log);
 
     return TweenAnimationBuilder<double>(
@@ -881,13 +1309,18 @@ class _TodayScreenState extends State<TodayScreen> {
                     shape: BoxShape.circle,
                     color: isDone
                         ? Colors.green
-                        : state == 'missed'
+                        : state == 'missed' ||
+                                state == 'failed' ||
+                                state == 'rejected'
                             ? const Color(0xFFE57373)
                             : state == 'available'
                                 ? const Color(0xFFF5F5F5)
                                 : state == 'soon'
                                     ? const Color(0xFFFFD166)
-                                    : const Color(0xFF7C7C84),
+                                    : state == 'submitted' ||
+                                            state == 'pending_verification'
+                                        ? const Color(0xFF4FC3F7)
+                                        : const Color(0xFF7C7C84),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -928,7 +1361,7 @@ class _TodayScreenState extends State<TodayScreen> {
                         children: [
                           _buildStatusChip(state),
                           Text(
-                            'Verification: $verificationType',
+                            'Verification: ${_verificationLabel(verificationType)}',
                             style: const TextStyle(
                               color: Color(0xFF9A9AA3),
                               fontSize: 12,
@@ -936,11 +1369,26 @@ class _TodayScreenState extends State<TodayScreen> {
                           ),
                         ],
                       ),
-                      if (!isDone && verificationType == 'manual') ...[
+                      if (!isDone &&
+                          verificationType == 'manual' &&
+                          state == 'available') ...[
                         const SizedBox(height: 6),
                         Text(
                           availability.message,
                           style: const TextStyle(
+                            color: Color(0xFF7C7C84),
+                            fontSize: 11,
+                            height: 1.3,
+                          ),
+                        ),
+                      ],
+                      if ((state == 'submitted' ||
+                              state == 'pending_verification') &&
+                          verificationType != 'manual') ...[
+                        const SizedBox(height: 6),
+                        const Text(
+                          'This task has already been submitted and is waiting for review.',
+                          style: TextStyle(
                             color: Color(0xFF7C7C84),
                             fontSize: 11,
                             height: 1.3,
@@ -1003,12 +1451,26 @@ class _TodayScreenState extends State<TodayScreen> {
   }
 
   Widget _buildFocusButton() {
-    final hasAvailableNow = _availableLogs.isNotEmpty;
+    final focusLogs = _availableLogs
+        .where((log) => _isFocusVerification(_verificationType(log)))
+        .toList();
+
+    final hasAvailableNow = focusLogs.isNotEmpty;
 
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton.icon(
-        onPressed: hasAvailableNow ? () {} : null,
+        onPressed: hasAvailableNow
+            ? () {
+                final log = focusLogs.first;
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => FocusModeScreen(log: log),
+                  ),
+                ).then((_) => _loadTodayData());
+              }
+            : null,
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFFF5F5F5),
           foregroundColor: Colors.black,
@@ -1022,7 +1484,7 @@ class _TodayScreenState extends State<TodayScreen> {
         ),
         icon: const Icon(Icons.center_focus_strong),
         label: Text(
-          hasAvailableNow ? 'Focus Mode' : 'No task available now',
+          hasAvailableNow ? 'Start Focus Mode' : 'No focus task available now',
           style: const TextStyle(
             fontWeight: FontWeight.w700,
           ),
@@ -1054,6 +1516,9 @@ class _TodayScreenState extends State<TodayScreen> {
     }
 
     final hasAvailableNow = _availableLogs.isNotEmpty;
+    final hasUpcoming = _upcomingLogs.isNotEmpty;
+    final hasReview = _reviewLogs.isNotEmpty;
+    final hasMissed = _missedLogs.isNotEmpty;
 
     return HoldToRefreshWrapper(
       onRefresh: _loadTodayData,
@@ -1066,24 +1531,37 @@ class _TodayScreenState extends State<TodayScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _buildTopHero(),
+            const SizedBox(height: 18),
+            _buildNextTaskCard(),
             if (hasAvailableNow) ...[
               const SizedBox(height: 18),
               _buildTaskSection(
                 title: 'Available now',
-                subtitle: 'These commitments can be executed right now.',
+                subtitle:
+                    'These commitments can be executed or submitted right now.',
                 logs: _availableLogs,
                 emptyText: '',
               ),
             ],
-            const SizedBox(height: 18),
-            _buildNextTaskCard(),
-            const SizedBox(height: 18),
-            _buildTaskSection(
-              title: 'Missed / expired',
-              subtitle: 'These execution windows have already closed.',
-              logs: _missedLogs,
-              emptyText: 'No missed tasks so far.',
-            ),
+            if (hasReview) ...[
+              const SizedBox(height: 18),
+              _buildTaskSection(
+                title: 'Pending review',
+                subtitle: 'Tasks already submitted and waiting on verification.',
+                logs: _reviewLogs,
+                emptyText: '',
+              ),
+            ],
+            if (hasMissed) ...[
+              const SizedBox(height: 18),
+              _buildTaskSection(
+                title: 'Missed / failed',
+                subtitle:
+                    'These execution windows have already closed or failed.',
+                logs: _missedLogs,
+                emptyText: '',
+              ),
+            ],
             const SizedBox(height: 20),
             _buildFocusButton(),
           ],
@@ -1097,7 +1575,44 @@ class _TodayScreenState extends State<TodayScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF0B0B0C),
       body: SafeArea(
-        child: _buildBody(),
+        child: Stack(
+          children: [
+            _buildBody(),
+            if (_isPreparingLocation)
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 16,
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF17171A),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFF232329)),
+                  ),
+                  child: const Row(
+                    children: [
+                      SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Getting current GPS location...',
+                          style: TextStyle(
+                            color: Color(0xFFF5F5F5),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

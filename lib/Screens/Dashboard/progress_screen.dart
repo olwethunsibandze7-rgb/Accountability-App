@@ -102,7 +102,12 @@ class _ProgressScreenState extends State<ProgressScreen> {
     final rawStatus = (log['status'] ?? 'pending').toString();
 
     if (rawStatus == 'done') return 'done';
-    if (rawStatus == 'missed' || rawStatus == 'failed') return 'missed';
+    if (rawStatus == 'missed' || rawStatus == 'failed' || rawStatus == 'rejected') {
+      return 'missed';
+    }
+    if (rawStatus == 'submitted' || rawStatus == 'pending_verification') {
+      return 'remaining';
+    }
 
     final start = _logStartDateTime(log);
     final end = _logEndDateTime(log);
@@ -286,14 +291,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
       final hasDone =
           dayLogs.any((log) => log['status'].toString() == 'done');
 
-      final hasMissed = dayLogs.any((log) {
-        final status = log['status'].toString();
-        return status == 'missed' || status == 'failed';
-      });
-
-      if (hasDone && !hasMissed) {
-        streak++;
-      } else if (hasDone) {
+      if (hasDone) {
         streak++;
       } else {
         break;
@@ -324,6 +322,18 @@ class _ProgressScreenState extends State<ProgressScreen> {
     if (_totalThisWeek == 0) return 0;
     return (_doneThisWeek + _remainingThisWeek) / _totalThisWeek;
   }
+
+  bool get _hasTodayProgressBars => _totalToday > 0;
+  bool get _hasWeekProgressBars => _totalThisWeek > 0;
+  bool get _hasSummaryContent =>
+      _doneToday > 0 ||
+      _upcomingToday > 0 ||
+      _availableNowToday > 0 ||
+      _missedToday > 0 ||
+      _doneThisWeek > 0 ||
+      _remainingThisWeek > 0 ||
+      _missedThisWeek > 0 ||
+      _totalToday > 0;
 
   Widget _buildMetricChip({
     required String label,
@@ -612,6 +622,111 @@ class _ProgressScreenState extends State<ProgressScreen> {
   }
 
   Widget _buildSummaryGrid() {
+    final rows = <Widget>[];
+
+    if (_doneToday > 0 || _upcomingToday > 0) {
+      rows.add(
+        Row(
+          children: [
+            Expanded(
+              child: _buildMetricChip(
+                label: 'Done Today',
+                value: '$_doneToday',
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildMetricChip(
+                label: 'Coming Later',
+                value: '$_upcomingToday',
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_availableNowToday > 0 || _missedToday > 0) {
+      if (rows.isNotEmpty) rows.add(const SizedBox(height: 10));
+      rows.add(
+        Row(
+          children: [
+            Expanded(
+              child: _buildMetricChip(
+                label: 'Available Now',
+                value: '$_availableNowToday',
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildMetricChip(
+                label: 'Missed Today',
+                value: '$_missedToday',
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_doneThisWeek > 0 || _remainingThisWeek > 0) {
+      if (rows.isNotEmpty) rows.add(const SizedBox(height: 10));
+      rows.add(
+        Row(
+          children: [
+            Expanded(
+              child: _buildMetricChip(
+                label: 'Done This Week',
+                value: '$_doneThisWeek',
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildMetricChip(
+                label: 'Recoverable Week',
+                value: '$_remainingThisWeek',
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_missedThisWeek > 0 || _totalToday > 0) {
+      if (rows.isNotEmpty) rows.add(const SizedBox(height: 10));
+      rows.add(
+        Row(
+          children: [
+            Expanded(
+              child: _buildMetricChip(
+                label: 'Missed This Week',
+                value: '$_missedThisWeek',
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildMetricChip(
+                label: 'Total Today',
+                value: '$_totalToday',
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (rows.isEmpty) {
+      rows.add(
+        const Text(
+          'No measurable execution data yet.',
+          style: TextStyle(
+            color: Color(0xFF9A9AA3),
+            fontSize: 14,
+          ),
+        ),
+      );
+    }
+
     return Container(
       margin: const EdgeInsets.only(top: 14),
       padding: const EdgeInsets.all(16),
@@ -628,77 +743,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
             subtitle: 'A clearer breakdown of what is done and what is still ahead.',
           ),
           const SizedBox(height: 4),
-          Row(
-            children: [
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Done Today',
-                  value: '$_doneToday',
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Coming Later',
-                  value: '$_upcomingToday',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Available Now',
-                  value: '$_availableNowToday',
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Missed Today',
-                  value: '$_missedToday',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Done This Week',
-                  value: '$_doneThisWeek',
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Recoverable Week',
-                  value: '$_remainingThisWeek',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Missed This Week',
-                  value: '$_missedThisWeek',
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Total Today',
-                  value: '$_totalToday',
-                ),
-              ),
-            ],
-          ),
+          ...rows,
         ],
       ),
     );
@@ -793,33 +838,37 @@ class _ProgressScreenState extends State<ProgressScreen> {
           children: [
             _buildTopCard(),
             const SizedBox(height: 18),
-            _buildSummaryGrid(),
+            if (_hasSummaryContent) _buildSummaryGrid(),
             _buildDayStatusCard(),
-            _buildProgressBar(
-              title: 'Today completion',
-              subtitle: 'Completed out of everything scheduled for today.',
-              value: _todayCompletionRate,
-              trailingText: '${(_todayCompletionRate * 100).round()}%',
-            ),
-            _buildProgressBar(
-              title: 'Today recoverability',
-              subtitle: 'Done plus still-recoverable work out of today’s total.',
-              value: _todayRecoverabilityRate,
-              trailingText: '${(_todayRecoverabilityRate * 100).round()}%',
-            ),
+            if (_hasTodayProgressBars) ...[
+              _buildProgressBar(
+                title: 'Today completion',
+                subtitle: 'Completed out of everything scheduled for today.',
+                value: _todayCompletionRate,
+                trailingText: '${(_todayCompletionRate * 100).round()}%',
+              ),
+              _buildProgressBar(
+                title: 'Today recoverability',
+                subtitle: 'Done plus still-recoverable work out of today’s total.',
+                value: _todayRecoverabilityRate,
+                trailingText: '${(_todayRecoverabilityRate * 100).round()}%',
+              ),
+            ],
             _buildWeekStatusCard(),
-            _buildProgressBar(
-              title: 'Weekly completion',
-              subtitle: 'Completed out of everything scheduled for this week.',
-              value: _weekCompletionRate,
-              trailingText: '${(_weekCompletionRate * 100).round()}%',
-            ),
-            _buildProgressBar(
-              title: 'Weekly recoverability',
-              subtitle: 'Done plus remaining recoverable work for this week.',
-              value: _weekRecoverabilityRate,
-              trailingText: '${(_weekRecoverabilityRate * 100).round()}%',
-            ),
+            if (_hasWeekProgressBars) ...[
+              _buildProgressBar(
+                title: 'Weekly completion',
+                subtitle: 'Completed out of everything scheduled for this week.',
+                value: _weekCompletionRate,
+                trailingText: '${(_weekCompletionRate * 100).round()}%',
+              ),
+              _buildProgressBar(
+                title: 'Weekly recoverability',
+                subtitle: 'Done plus remaining recoverable work for this week.',
+                value: _weekRecoverabilityRate,
+                trailingText: '${(_weekRecoverabilityRate * 100).round()}%',
+              ),
+            ],
             _buildInsightCard(),
           ],
         ),

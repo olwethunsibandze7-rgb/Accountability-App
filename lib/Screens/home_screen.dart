@@ -1,12 +1,14 @@
+// ignore_for_file: deprecated_member_use, use_build_context_synchronously
+
 import 'package:achievr_app/Screens/Dashboard/dashboard_screen.dart';
-import 'package:achievr_app/Screens/goal_selection_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'goal_input_screen.dart';
-import 'time_constraint_screen.dart';
+
 import 'confirmation_screen.dart';
+import 'goal_input_screen.dart';
 import 'goal_setup_screen.dart';
+import 'time_constraint_screen.dart';
 
 // --------------------------
 // Providers
@@ -36,6 +38,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Animation<double>? _opacityOut;
 
   final SupabaseClient supabase = Supabase.instance.client;
+
+  static const Map<int, String> _dayMap = {
+    1: 'Monday',
+    2: 'Tuesday',
+    3: 'Wednesday',
+    4: 'Thursday',
+    5: 'Friday',
+    6: 'Saturday',
+  };
 
   @override
   void initState() {
@@ -88,7 +99,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final session = supabase.auth.currentSession;
 
     if (session == null) {
-      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const LoginSignupScreen()),
@@ -118,7 +128,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         return;
       }
 
-      final bool setupCompleted = (profile['setup_completed'] as bool?) ?? false;
+      final bool setupCompleted =
+          (profile['setup_completed'] as bool?) ?? false;
       final int onboardingStep = (profile['onboarding_step'] as int?) ?? 0;
 
       if (!mounted) return;
@@ -172,19 +183,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Future<void> _resumeGoalInput(String userId) async {
-    final goalsResponse = await supabase
-        .from('goals')
-        .select('goal_id, title, category, description, why, success_metric')
-        .eq('user_id', userId)
-        .eq('active', true)
-        .order('created_at', ascending: true);
-
-    final List<Map<String, dynamic>> goalRecords =
-        List<Map<String, dynamic>>.from(goalsResponse);
+    final detailedGoals = await _buildDetailedGoalsFromDb(userId);
 
     if (!mounted) return;
 
-    if (goalRecords.isEmpty) {
+    if (detailedGoals.isEmpty) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const GoalSetupIntroScreen()),
@@ -192,13 +195,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       return;
     }
 
+    final selectedGoalRecords = detailedGoals
+        .map(
+          (goal) => {
+            'goal_id': goal['goal_id'],
+            'goal_template_id': goal['goal_template_id'],
+            'title': goal['title'],
+            'category': goal['category'],
+            'description': goal['description'],
+            'why': goal['why'],
+            'success_metric': goal['metrics'],
+          },
+        )
+        .toList();
+
+    final Map<String, dynamic> goalHabits = {
+      for (final goal in detailedGoals)
+        goal['title'].toString(): List<Map<String, dynamic>>.from(
+          goal['habits'] as List,
+        ),
+    };
+
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
         builder: (_) => GoalInputScreen(
           userId: userId,
-          selectedGoalRecords: goalRecords,
-          goalHabits: GoalSelectionScreen.goalHabits,
+          selectedGoalRecords: selectedGoalRecords,
+          goalHabits: goalHabits,
         ),
       ),
     );
@@ -232,27 +256,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final detailedGoals = await _buildDetailedGoalsFromDb(userId);
     final blockedHours = await _loadBlockedHoursFromDb(userId);
 
-    final goalsWithHabits = detailedGoals.map((goal) {
-      final List<dynamic> rawHabits = goal['habits'] as List<dynamic>? ?? [];
-      return {
-        'goal_id': goal['goal_id'],
-        'title': goal['title'],
-        'category': goal['category'],
-        'description': goal['description'],
-        'why': goal['why'],
-        'metrics': goal['metrics'],
-        'habits': rawHabits
-            .map((habitTitle) => {
-                  'title': habitTitle.toString(),
-                  'duration': 1,
-                })
-            .toList(),
-      };
-    }).toList();
-
     if (!mounted) return;
 
-    if (goalsWithHabits.isEmpty) {
+    if (detailedGoals.isEmpty) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const GoalSetupIntroScreen()),
@@ -266,7 +272,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         builder: (_) => ConfirmationScreen(
           schedule: const {},
           userId: userId,
-          goalsWithHabits: goalsWithHabits,
+          goalsWithHabits: detailedGoals,
           blockedHours: blockedHours,
         ),
       ),
@@ -278,7 +284,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   ) async {
     final goalsResponse = await supabase
         .from('goals')
-        .select('goal_id, title, category, description, why, success_metric')
+        .select(
+          '''
+          goal_id,
+          goal_template_id,
+          title,
+          category,
+          description,
+          why,
+          success_metric,
+          active
+          ''',
+        )
         .eq('user_id', userId)
         .eq('active', true)
         .order('created_at', ascending: true);
@@ -293,7 +310,31 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
     final habitsResponse = await supabase
         .from('habits')
-        .select('goal_id, title')
+        .select(
+          '''
+          habit_id,
+          habit_template_id,
+          goal_id,
+          title,
+          description,
+          target_frequency,
+          duration_minutes,
+          verification_type,
+          verification_locked,
+          requires_verifier,
+          evidence_type,
+          enforcement_level,
+          min_valid_minutes,
+          min_completion_ratio,
+          max_interruptions,
+          grace_seconds,
+          strict_fail_on_exit,
+          base_points,
+          penalty_points,
+          tier_weight,
+          active
+          ''',
+        )
         .inFilter('goal_id', goalIds)
         .eq('active', true)
         .order('created_at', ascending: true);
@@ -301,38 +342,53 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final List<Map<String, dynamic>> habitRows =
         List<Map<String, dynamic>>.from(habitsResponse);
 
-    final Map<String, List<String>> habitsByGoalId = {};
+    final Map<String, List<Map<String, dynamic>>> habitsByGoalId = {};
+
     for (final row in habitRows) {
-      final goalId = row['goal_id'].toString();
-      final title = row['title'].toString();
+      final String goalId = row['goal_id'].toString();
+
       habitsByGoalId.putIfAbsent(goalId, () => []);
-      habitsByGoalId[goalId]!.add(title);
+
+      habitsByGoalId[goalId]!.add({
+        'habit_id': row['habit_id'],
+        'habit_template_id': row['habit_template_id'],
+        'title': row['title'],
+        'description': row['description'],
+        'target_frequency': row['target_frequency'],
+        'duration_minutes': row['duration_minutes'],
+        'verification_type': row['verification_type'],
+        'verification_locked': row['verification_locked'] ?? true,
+        'requires_verifier': row['requires_verifier'] ?? false,
+        'evidence_type': row['evidence_type'],
+        'enforcement_level': row['enforcement_level'],
+        'min_valid_minutes': row['min_valid_minutes'],
+        'min_completion_ratio': row['min_completion_ratio'],
+        'max_interruptions': row['max_interruptions'],
+        'grace_seconds': row['grace_seconds'],
+        'strict_fail_on_exit': row['strict_fail_on_exit'] ?? false,
+        'base_points': row['base_points'],
+        'penalty_points': row['penalty_points'],
+        'tier_weight': row['tier_weight'],
+      });
     }
 
     return goalRows.map((goal) {
-      final goalId = goal['goal_id'].toString();
+      final String goalId = goal['goal_id'].toString();
+
       return {
         'goal_id': goalId,
+        'goal_template_id': goal['goal_template_id'],
         'title': goal['title'],
         'category': goal['category'],
         'description': goal['description'] ?? '',
         'why': goal['why'] ?? '',
         'metrics': goal['success_metric'] ?? '',
-        'habits': habitsByGoalId[goalId] ?? <String>[],
+        'habits': habitsByGoalId[goalId] ?? <Map<String, dynamic>>[],
       };
     }).toList();
   }
 
   Future<Map<String, Set<int>>> _loadBlockedHoursFromDb(String userId) async {
-    const dayMap = {
-      1: 'Monday',
-      2: 'Tuesday',
-      3: 'Wednesday',
-      4: 'Thursday',
-      5: 'Friday',
-      6: 'Saturday',
-    };
-
     final Map<String, Set<int>> blockedHours = {
       'Monday': <int>{},
       'Tuesday': <int>{},
@@ -349,12 +405,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
     for (final row in response) {
       final int dayIndex = row['day_of_week'] as int;
-      final String? dayName = dayMap[dayIndex];
+      final String? dayName = _dayMap[dayIndex];
       if (dayName == null) continue;
 
       final int startHour =
           int.parse((row['start_time'] as String).split(':')[0]);
-      final int endHour = int.parse((row['end_time'] as String).split(':')[0]);
+      final int endHour =
+          int.parse((row['end_time'] as String).split(':')[0]);
 
       for (int hour = startHour; hour < endHour; hour++) {
         blockedHours[dayName]!.add(hour);
@@ -747,85 +804,85 @@ class _AuthSignupDialogState extends State<_AuthSignupDialog> {
     return '$hour:$minute $suffix';
   }
 
-Future<void> _signup() async {
-  final username = _usernameController.text.trim();
-  final email = _emailController.text.trim();
-  final password = _passwordController.text.trim();
+  Future<void> _signup() async {
+    final username = _usernameController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
 
-  if (username.isEmpty) {
-    setState(() => _error = 'Username is required.');
-    return;
-  }
-
-  if (email.isEmpty || password.isEmpty) {
-    setState(() => _error = 'Email and password are required.');
-    return;
-  }
-
-  if (password.length < 6) {
-    setState(() => _error = 'Password must be at least 6 characters.');
-    return;
-  }
-
-  setState(() {
-    _isLoading = true;
-    _error = null;
-  });
-
-  try {
-    final response = await widget.supabase.auth.signUp(
-      email: email,
-      password: password,
-      data: {
-        'username': username,
-      },
-    );
-
-    final user = response.user;
-    if (user == null) {
-      setState(() => _error = 'Signup failed. Try again.');
+    if (username.isEmpty) {
+      setState(() => _error = 'Username is required.');
       return;
     }
 
-    final cleanBase = username
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9_]'), '')
-        .replaceAll(RegExp(r'_+'), '_');
+    if (email.isEmpty || password.isEmpty) {
+      setState(() => _error = 'Email and password are required.');
+      return;
+    }
 
-    final safeBase = cleanBase.isEmpty ? 'user' : cleanBase;
-    final shortCode =
-        user.id.replaceAll('-', '').substring(0, 4).toUpperCase();
-    final publicHandle = '${safeBase}_$shortCode';
+    if (password.length < 6) {
+      setState(() => _error = 'Password must be at least 6 characters.');
+      return;
+    }
 
-    await widget.supabase.from('profiles').upsert({
-      'id': user.id,
-      'username': username,
-      'public_handle': publicHandle,
-      'timezone': 'UTC',
-      'plan_tier': _selectedPlan,
-      'strict_mode_enabled': _strictModeEnabled,
-      'wake_time': _timeToDbString(_wakeTime),
-      'sleep_time': _timeToDbString(_sleepTime),
-      'setup_completed': false,
-      'onboarding_step': 1,
+    setState(() {
+      _isLoading = true;
+      _error = null;
     });
 
-    if (!mounted) return;
+    try {
+      final response = await widget.supabase.auth.signUp(
+        email: email,
+        password: password,
+        data: {
+          'username': username,
+        },
+      );
 
-    Navigator.of(context).pop();
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const GoalSetupIntroScreen()),
-    );
-  } on AuthException catch (e) {
-    setState(() => _error = e.message);
-  } catch (e) {
-    setState(() => _error = 'Unexpected error: $e');
-  } finally {
-    if (mounted) {
-      setState(() => _isLoading = false);
+      final user = response.user;
+      if (user == null) {
+        setState(() => _error = 'Signup failed. Try again.');
+        return;
+      }
+
+      final cleanBase = username
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^a-z0-9_]'), '')
+          .replaceAll(RegExp(r'_+'), '_');
+
+      final safeBase = cleanBase.isEmpty ? 'user' : cleanBase;
+      final shortCode =
+          user.id.replaceAll('-', '').substring(0, 4).toUpperCase();
+      final publicHandle = '${safeBase}_$shortCode';
+
+      await widget.supabase.from('profiles').upsert({
+        'id': user.id,
+        'username': username,
+        'public_handle': publicHandle,
+        'timezone': 'UTC',
+        'plan_tier': _selectedPlan,
+        'strict_mode_enabled': _strictModeEnabled,
+        'wake_time': _timeToDbString(_wakeTime),
+        'sleep_time': _timeToDbString(_sleepTime),
+        'setup_completed': false,
+        'onboarding_step': 1,
+      });
+
+      if (!mounted) return;
+
+      Navigator.of(context).pop();
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const GoalSetupIntroScreen()),
+      );
+    } on AuthException catch (e) {
+      setState(() => _error = e.message);
+    } catch (e) {
+      setState(() => _error = 'Unexpected error: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
-}
 
   InputDecoration _inputDecoration(String hint) {
     return InputDecoration(
@@ -911,9 +968,7 @@ Future<void> _signup() async {
             ),
             Radio<String>(
               value: title.toLowerCase() == 'free' ? 'free' : 'pro',
-              // ignore: deprecated_member_use
               groupValue: _selectedPlan,
-              // ignore: deprecated_member_use
               onChanged: locked
                   ? null
                   : (value) {
@@ -986,7 +1041,6 @@ Future<void> _signup() async {
                   style: const TextStyle(color: Colors.white),
                   decoration: _inputDecoration('Password'),
                 ),
-                const SizedBox(height: 14),
                 const SizedBox(height: 18),
                 Container(
                   padding: const EdgeInsets.all(14),
@@ -1017,7 +1071,8 @@ Future<void> _signup() async {
                       const SizedBox(height: 10),
                       _buildLockedPlanCard(
                         title: 'Pro',
-                        subtitle: 'Locked for now. Paid plan is not yet available in this build.',
+                        subtitle:
+                            'Locked for now. Paid plan is not yet available in this build.',
                         selected: _selectedPlan == 'pro',
                         locked: true,
                         onTap: null,

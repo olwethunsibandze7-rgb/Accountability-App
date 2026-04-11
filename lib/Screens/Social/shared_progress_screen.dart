@@ -10,10 +10,11 @@ class SharedProgressScreen extends StatefulWidget {
 }
 
 class _SharedProgressScreenState extends State<SharedProgressScreen> {
-  final SharedProgressService _sharedProgressService = SharedProgressService();
   final FriendsService _friendsService = FriendsService();
+  final SharedProgressService _sharedProgressService = SharedProgressService();
 
   bool _isLoading = true;
+  bool _isSaving = false;
   String? _error;
 
   List<Map<String, dynamic>> _friends = [];
@@ -32,21 +33,23 @@ class _SharedProgressScreenState extends State<SharedProgressScreen> {
     });
 
     try {
-      final friends = await _friendsService.fetchAcceptedFriendProfiles();
-      final permissions = await _sharedProgressService.fetchMySharingPermissions();
+      final results = await Future.wait([
+        _friendsService.fetchAcceptedFriendProfiles(),
+        _sharedProgressService.fetchMySharingPermissions(),
+      ]);
 
       if (!mounted) return;
 
       setState(() {
-        _friends = friends;
-        _permissions = permissions;
+        _friends = List<Map<String, dynamic>>.from(results[0] as List);
+        _permissions = List<Map<String, dynamic>>.from(results[1] as List);
         _isLoading = false;
       });
     } catch (e) {
       if (!mounted) return;
 
       setState(() {
-        _error = 'Failed to load shared progress settings.\n$e';
+        _error = 'Failed to load visibility settings.\n$e';
         _isLoading = false;
       });
     }
@@ -54,7 +57,7 @@ class _SharedProgressScreenState extends State<SharedProgressScreen> {
 
   Map<String, dynamic>? _permissionForViewer(String viewerUserId) {
     for (final permission in _permissions) {
-      if (permission['viewer_user_id'].toString() == viewerUserId) {
+      if (permission['viewer_user_id']?.toString() == viewerUserId) {
         return permission;
       }
     }
@@ -68,6 +71,10 @@ class _SharedProgressScreenState extends State<SharedProgressScreen> {
     required bool canViewHabitTitles,
   }) async {
     try {
+      setState(() {
+        _isSaving = true;
+      });
+
       await _sharedProgressService.upsertSharingPermission(
         viewerUserId: viewerUserId,
         canViewProgress: canViewProgress,
@@ -80,21 +87,217 @@ class _SharedProgressScreenState extends State<SharedProgressScreen> {
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Shared progress settings updated.')),
+        const SnackBar(content: Text('Visibility settings updated.')),
       );
     } catch (e) {
       if (!mounted) return;
 
+      setState(() {
+        _isSaving = false;
+      });
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to update permission: $e')),
       );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
     }
+  }
+
+  int get _progressVisibleCount {
+    int count = 0;
+    for (final friend in _friends) {
+      final viewerUserId = friend['other_user_id']?.toString() ?? '';
+      final permission = _permissionForViewer(viewerUserId);
+      if (permission?['can_view_progress'] == true) count++;
+    }
+    return count;
+  }
+
+  int get _goalTitlesVisibleCount {
+    int count = 0;
+    for (final friend in _friends) {
+      final viewerUserId = friend['other_user_id']?.toString() ?? '';
+      final permission = _permissionForViewer(viewerUserId);
+      if (permission?['can_view_goal_titles'] == true) count++;
+    }
+    return count;
+  }
+
+  int get _habitTitlesVisibleCount {
+    int count = 0;
+    for (final friend in _friends) {
+      final viewerUserId = friend['other_user_id']?.toString() ?? '';
+      final permission = _permissionForViewer(viewerUserId);
+      if (permission?['can_view_habit_titles'] == true) count++;
+    }
+    return count;
+  }
+
+  Widget _buildSectionTitle(String title, {String? subtitle}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10, top: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFFF5F5F5),
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          if (subtitle != null) ...[
+            const SizedBox(height: 3),
+            Text(
+              subtitle,
+              style: const TextStyle(
+                color: Color(0xFF9A9AA3),
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetricChip({
+    required String label,
+    required String value,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF101013),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF232329)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: const TextStyle(
+              color: Color(0xFFF5F5F5),
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFF9A9AA3),
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTopCard() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF17171A),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFF232329)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Visibility',
+            style: TextStyle(
+              color: Color(0xFFF5F5F5),
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+              height: 1.1,
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Control what each friend can see. This is where you decide how much social pressure, transparency, and accountability you want.',
+            style: TextStyle(
+              color: Color(0xFFB3B3BB),
+              height: 1.45,
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              Expanded(
+                child: _buildMetricChip(
+                  label: 'Friends',
+                  value: '${_friends.length}',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildMetricChip(
+                  label: 'Progress Visible',
+                  value: '$_progressVisibleCount',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildMetricChip(
+                  label: 'Goal Titles Visible',
+                  value: '$_goalTitlesVisibleCount',
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVisibilitySummaryCard() {
+    return Container(
+      margin: const EdgeInsets.only(top: 18),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF17171A),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF232329)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildSectionTitle(
+            'Current visibility baseline',
+            subtitle: 'A quick read on how exposed your progress currently is.',
+          ),
+          Text(
+            _friends.isEmpty
+                ? 'You do not have any friends connected yet, so nothing is being shared.'
+                : '$_progressVisibleCount of ${_friends.length} friend${_friends.length == 1 ? '' : 's'} can see your progress. '
+                    '$_goalTitlesVisibleCount can see goal names, and $_habitTitlesVisibleCount can see habit names.',
+            style: const TextStyle(
+              color: Color(0xFFB3B3BB),
+              fontSize: 14,
+              height: 1.45,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildFriendPermissionCard(Map<String, dynamic> friend) {
     final otherProfile = friend['other_profile'] as Map<String, dynamic>?;
     final viewerUserId = friend['other_user_id'].toString();
     final username = (otherProfile?['username'] ?? 'Unknown').toString();
+    final publicHandle = (otherProfile?['public_handle'] ?? '').toString();
 
     final permission = _permissionForViewer(viewerUserId);
 
@@ -121,6 +324,14 @@ class _SharedProgressScreenState extends State<SharedProgressScreen> {
               fontSize: 15,
             ),
           ),
+          const SizedBox(height: 4),
+          Text(
+            publicHandle.isNotEmpty ? '@$publicHandle' : viewerUserId,
+            style: const TextStyle(
+              color: Color(0xFF9A9AA3),
+              fontSize: 12,
+            ),
+          ),
           const SizedBox(height: 10),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
@@ -134,14 +345,16 @@ class _SharedProgressScreenState extends State<SharedProgressScreen> {
             ),
             value: canViewProgress,
             activeThumbColor: Colors.blueAccent,
-            onChanged: (value) {
-              _togglePermission(
-                viewerUserId: viewerUserId,
-                canViewProgress: value,
-                canViewGoalTitles: canViewGoalTitles,
-                canViewHabitTitles: canViewHabitTitles,
-              );
-            },
+            onChanged: _isSaving
+                ? null
+                : (value) {
+                    _togglePermission(
+                      viewerUserId: viewerUserId,
+                      canViewProgress: value,
+                      canViewGoalTitles: canViewGoalTitles,
+                      canViewHabitTitles: canViewHabitTitles,
+                    );
+                  },
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
@@ -155,14 +368,16 @@ class _SharedProgressScreenState extends State<SharedProgressScreen> {
             ),
             value: canViewGoalTitles,
             activeThumbColor: Colors.blueAccent,
-            onChanged: (value) {
-              _togglePermission(
-                viewerUserId: viewerUserId,
-                canViewProgress: canViewProgress,
-                canViewGoalTitles: value,
-                canViewHabitTitles: canViewHabitTitles,
-              );
-            },
+            onChanged: _isSaving
+                ? null
+                : (value) {
+                    _togglePermission(
+                      viewerUserId: viewerUserId,
+                      canViewProgress: canViewProgress,
+                      canViewGoalTitles: value,
+                      canViewHabitTitles: canViewHabitTitles,
+                    );
+                  },
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
@@ -171,20 +386,52 @@ class _SharedProgressScreenState extends State<SharedProgressScreen> {
               style: TextStyle(color: Color(0xFFF5F5F5)),
             ),
             subtitle: const Text(
-              'Shows actual habit names instead of restricted visibility later.',
+              'Shows specific habit names instead of generic progress only.',
               style: TextStyle(color: Color(0xFF9A9AA3)),
             ),
             value: canViewHabitTitles,
             activeThumbColor: Colors.blueAccent,
-            onChanged: (value) {
-              _togglePermission(
-                viewerUserId: viewerUserId,
-                canViewProgress: canViewProgress,
-                canViewGoalTitles: canViewGoalTitles,
-                canViewHabitTitles: value,
-              );
-            },
+            onChanged: _isSaving
+                ? null
+                : (value) {
+                    _togglePermission(
+                      viewerUserId: viewerUserId,
+                      canViewProgress: canViewProgress,
+                      canViewGoalTitles: canViewGoalTitles,
+                      canViewHabitTitles: value,
+                    );
+                  },
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPermissionsSection() {
+    return Container(
+      margin: const EdgeInsets.only(top: 18),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF17171A),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF232329)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildSectionTitle(
+            'Friend-by-friend controls',
+            subtitle: 'Set visibility rules for each person individually.',
+          ),
+          if (_friends.isEmpty)
+            const Text(
+              'No friends found. Add people first to control what they can see.',
+              style: TextStyle(
+                color: Color(0xFF9A9AA3),
+                fontSize: 13,
+              ),
+            ),
+          ..._friends.map(_buildFriendPermissionCard),
         ],
       ),
     );
@@ -218,54 +465,9 @@ class _SharedProgressScreenState extends State<SharedProgressScreen> {
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
         children: [
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: const Color(0xFF17171A),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(color: const Color(0xFF232329)),
-            ),
-            child: const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Shared Progress',
-                  style: TextStyle(
-                    color: Color(0xFFF5F5F5),
-                    fontSize: 28,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                SizedBox(height: 10),
-                Text(
-                  'Control what each friend can see about your progress, goals, and habits.',
-                  style: TextStyle(
-                    color: Color(0xFFB3B3BB),
-                    height: 1.45,
-                    fontSize: 14,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 18),
-          if (_friends.isEmpty)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF17171A),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFF232329)),
-              ),
-              child: const Text(
-                'No accepted friends yet. Add friends before configuring shared progress.',
-                style: TextStyle(
-                  color: Color(0xFF9A9AA3),
-                  fontSize: 13,
-                ),
-              ),
-            ),
-          ..._friends.map(_buildFriendPermissionCard),
+          _buildTopCard(),
+          _buildVisibilitySummaryCard(),
+          _buildPermissionsSection(),
         ],
       ),
     );
@@ -279,7 +481,7 @@ class _SharedProgressScreenState extends State<SharedProgressScreen> {
         backgroundColor: const Color(0xFF0B0B0C),
         elevation: 0,
         title: const Text(
-          'Shared Progress',
+          'Visibility',
           style: TextStyle(
             color: Color(0xFFF5F5F5),
             fontWeight: FontWeight.w800,

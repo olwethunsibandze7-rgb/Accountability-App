@@ -1,4 +1,3 @@
-import 'package:achievr_app/Screens/Social/add_friend_screen.dart';
 import 'package:achievr_app/Screens/Social/friend_requests_screen.dart';
 import 'package:achievr_app/Screens/Social/friends_screen.dart';
 import 'package:achievr_app/Screens/Social/shared_progress_screen.dart';
@@ -140,6 +139,34 @@ class _SocialScreenState extends State<SocialScreen> {
         const SnackBar(content: Text('Failed to sign out.')),
       );
     }
+  }
+
+  void _openFriends() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const FriendsScreen()),
+    ).then((_) => _loadSocialData());
+  }
+
+  void _openRequests() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const FriendRequestsScreen()),
+    ).then((_) => _loadSocialData());
+  }
+
+  void _openVerification() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const VerificationSettingsScreen()),
+    ).then((_) => _loadSocialData());
+  }
+
+  void _openVisibility() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SharedProgressScreen()),
+    ).then((_) => _loadSocialData());
   }
 
   void _showProfileSheet() {
@@ -378,7 +405,7 @@ class _SocialScreenState extends State<SocialScreen> {
           ],
         ),
         const Spacer(),
-        _ProfileAvatarSpacer(),
+        const _ProfileAvatarSpacer(),
       ],
     );
   }
@@ -453,7 +480,7 @@ class _SocialScreenState extends State<SocialScreen> {
           ),
           const SizedBox(height: 10),
           const Text(
-            'Build your accountability circle, manage partner verification, and control what progress gets shared.',
+            'Build your accountability circle, manage verification, and control what progress other people can see.',
             style: TextStyle(
               color: Color(0xFFB3B3BB),
               height: 1.45,
@@ -483,132 +510,68 @@ class _SocialScreenState extends State<SocialScreen> {
     );
   }
 
-Widget _buildMainGrid() {
-  return Container(
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: const Color(0xFF17171A),
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: const Color(0xFF232329)),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildSectionTitle(
-          'Social hub',
-          subtitle: 'Start with the highest-value accountability actions.',
-        ),
-        Row(
-          children: [
-            Expanded(
-              child: _buildActionCard(
-                icon: Icons.group_outlined,
-                title: 'Friends',
-                subtitle: 'See accepted connections',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const FriendsScreen(),
-                    ),
-                  );
-                },
+  Widget _buildMainGrid() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF17171A),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF232329)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildSectionTitle(
+            'Social hub',
+            subtitle: 'Four clear surfaces for your accountability system.',
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: _buildActionCard(
+                  icon: Icons.group_outlined,
+                  title: 'Friends',
+                  subtitle: 'Friends + search in one place',
+                  onTap: _openFriends,
+                ),
               ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildActionCard(
-                icon: Icons.person_add_alt_1_outlined,
-                title: 'Add Friend',
-                subtitle: 'Search and connect',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const AddFriendScreen(),
-                    ),
-                  );
-                },
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildActionCard(
+                  icon: Icons.mail_outline,
+                  title: 'Requests',
+                  subtitle: 'Incoming and sent invites',
+                  onTap: _openRequests,
+                ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: _buildActionCard(
-                icon: Icons.mail_outline,
-                title: 'Requests',
-                subtitle: 'Invites and responses',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const FriendRequestsScreen(),
-                    ),
-                  );
-                },
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _buildActionCard(
+                  icon: Icons.verified_user_outlined,
+                  title: 'Verification',
+                  subtitle: 'Manage verifiers and reviews',
+                  onTap: _openVerification,
+                ),
               ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildActionCard(
-                icon: Icons.verified_user_outlined,
-                title: 'Verification',
-                subtitle: 'Set partner verification',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const VerificationSettingsScreen(),
-                    ),
-                  );
-                },
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildActionCard(
+                  icon: Icons.visibility_outlined,
+                  title: 'Visibility',
+                  subtitle: 'Control shared progress',
+                  onTap: _openVisibility,
+                ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: _buildActionCard(
-                icon: Icons.visibility_outlined,
-                title: 'Shared Progress',
-                subtitle: 'Control visibility',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const SharedProgressScreen(),
-                    ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildActionCard(
-                icon: Icons.handshake_outlined,
-                title: 'Partner System',
-                subtitle: 'Verification layer ready',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const VerificationSettingsScreen(),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ],
-    ),
-  );
-}
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildSnapshotCard() {
     return Container(
@@ -622,8 +585,8 @@ Widget _buildMainGrid() {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildSectionTitle(
-            'Social baseline',
-            subtitle: 'System values that shape accountability behavior.',
+            'Accountability baseline',
+            subtitle: 'Core values shaping your social system.',
           ),
           Row(
             children: [
@@ -781,7 +744,7 @@ Widget _buildMainGrid() {
                           ),
                           SizedBox(height: 4),
                           Text(
-                            'Settings, admin, and system preferences.',
+                            'Social navigation and account actions.',
                             style: TextStyle(
                               color: Color(0xFF9A9AA3),
                               fontSize: 12,
@@ -795,34 +758,28 @@ Widget _buildMainGrid() {
               ),
               const SizedBox(height: 18),
               _buildDrawerTile(
-                icon: Icons.notifications_none,
-                title: 'Notifications',
-                subtitle: 'Reminder and alert preferences',
-                onTap: () {},
+                icon: Icons.group_outlined,
+                title: 'Friends',
+                subtitle: 'Friends list and search',
+                onTap: _openFriends,
               ),
               _buildDrawerTile(
-                icon: Icons.settings_outlined,
-                title: 'Settings',
-                subtitle: 'General app behavior and preferences',
-                onTap: () {},
+                icon: Icons.mail_outline,
+                title: 'Requests',
+                subtitle: 'Incoming and outgoing friend requests',
+                onTap: _openRequests,
               ),
               _buildDrawerTile(
-                icon: Icons.shield_outlined,
-                title: 'Verification settings',
-                subtitle: 'Rules for manual and partner verification',
-                onTap: () {},
+                icon: Icons.verified_user_outlined,
+                title: 'Verification',
+                subtitle: 'Manage verifiers and partner review setup',
+                onTap: _openVerification,
               ),
               _buildDrawerTile(
-                icon: Icons.schedule_outlined,
-                title: 'Schedule preferences',
-                subtitle: 'Timing and execution behavior',
-                onTap: () {},
-              ),
-              _buildDrawerTile(
-                icon: Icons.admin_panel_settings_outlined,
-                title: 'Admin tools',
-                subtitle: 'Debug and internal utility surfaces',
-                onTap: () {},
+                icon: Icons.visibility_outlined,
+                title: 'Visibility',
+                subtitle: 'Control what others can see',
+                onTap: _openVisibility,
               ),
               const Spacer(),
               _buildDrawerTile(

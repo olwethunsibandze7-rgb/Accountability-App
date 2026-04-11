@@ -233,6 +233,29 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
     }
   }
 
+  String _verificationLabel(String raw) {
+    switch (raw) {
+      case 'manual':
+        return 'Manual';
+      case 'focus_auto':
+        return 'Focus Auto';
+      case 'partner':
+        return 'Partner Review';
+      case 'focus_partner':
+        return 'Focus + Partner';
+      case 'location':
+        return 'Location';
+      case 'location_focus':
+        return 'Location + Focus';
+      case 'location_partner':
+        return 'Location + Partner';
+      case 'location_focus_partner':
+        return 'Location + Focus + Partner';
+      default:
+        return raw.replaceAll('_', ' ');
+    }
+  }
+
   Map<int, List<Map<String, dynamic>>> get _groupedSchedules {
     final Map<int, List<Map<String, dynamic>>> grouped = {
       1: [],
@@ -273,6 +296,11 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
     });
 
     return days;
+  }
+
+  List<int> get _orderedDaysWithTasks {
+    final grouped = _groupedSchedules;
+    return _orderedDays.where((day) => (grouped[day] ?? []).isNotEmpty).toList();
   }
 
   String _daySubtitle(int day) {
@@ -349,8 +377,9 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
   }
 
   Widget _buildTopCard() {
-    final activeDays =
-        _groupedSchedules.entries.where((e) => e.value.isNotEmpty).length;
+    final activeDays = _groupedSchedules.entries
+        .where((e) => e.value.isNotEmpty)
+        .length;
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -544,6 +573,33 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
     );
   }
 
+  Widget _buildEmptyWeekCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF17171A),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF232329)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildSectionTitle(
+            'Weekly view',
+            subtitle: 'Your recurring schedule will appear here.',
+          ),
+          const Text(
+            'No scheduled habits found for this week.',
+            style: TextStyle(
+              color: Color(0xFF9A9AA3),
+              fontSize: 13,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildDayCard(int day, List<Map<String, dynamic>> items, int index) {
     final totalMinutes = _dayTotalMinutes(items);
     final load = _dayLoadLabel(totalMinutes, items.length);
@@ -590,17 +646,6 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
                 _buildLoadChip(load),
               ],
             ),
-            if (items.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 10),
-                child: Text(
-                  'No scheduled habits.',
-                  style: TextStyle(
-                    color: Color(0xFF9A9AA3),
-                    fontSize: 13,
-                  ),
-                ),
-              ),
             ...items.map((item) {
               return Container(
                 margin: const EdgeInsets.only(top: 10),
@@ -653,7 +698,7 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            'Verification: ${item['verification_type']}',
+                            'Verification: ${_verificationLabel(item['verification_type'].toString())}',
                             style: const TextStyle(
                               color: Color(0xFF7C7C84),
                               fontSize: 11,
@@ -695,7 +740,7 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
     }
 
     final grouped = _groupedSchedules;
-    final orderedDays = _orderedDays;
+    final orderedDaysWithTasks = _orderedDaysWithTasks;
 
     return HoldToRefreshWrapper(
       onRefresh: _loadUpcomingData,
@@ -711,14 +756,17 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
             const SizedBox(height: 18),
             _buildNext24HoursCard(),
             const SizedBox(height: 18),
-            ...List.generate(
-              orderedDays.length,
-              (index) => _buildDayCard(
-                orderedDays[index],
-                grouped[orderedDays[index]] ?? [],
-                index,
+            if (orderedDaysWithTasks.isEmpty)
+              _buildEmptyWeekCard()
+            else
+              ...List.generate(
+                orderedDaysWithTasks.length,
+                (index) => _buildDayCard(
+                  orderedDaysWithTasks[index],
+                  grouped[orderedDaysWithTasks[index]] ?? [],
+                  index,
+                ),
               ),
-            ),
           ],
         ),
       ),

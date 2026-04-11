@@ -13,7 +13,8 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
   int _screenVersion = 0;
 
@@ -25,9 +26,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
         SocialScreen(key: ValueKey('social_$_screenVersion')),
       ];
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted) return;
+
+    if (state == AppLifecycleState.resumed) {
+      _refreshAllTabs();
+    }
+  }
+
   void _refreshAllTabs() {
+    if (!mounted) return;
+
     setState(() {
       _screenVersion++;
+    });
+  }
+
+  void _handleTabTap(int index) {
+    if (!mounted) return;
+
+    if (_currentIndex == index) {
+      _refreshAllTabs();
+      return;
+    }
+
+    setState(() {
+      _currentIndex = index;
     });
   }
 
@@ -284,6 +321,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  FloatingActionButton _buildClockFab() {
+    return FloatingActionButton.extended(
+      onPressed: _openDebugClockSheet,
+      backgroundColor: const Color(0xFF17171A),
+      foregroundColor: const Color(0xFFF5F5F5),
+      elevation: 0,
+      label: Text(
+        AppClock.isDebugClockEnabled ? 'Debug Time' : 'Clock',
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      ),
+      icon: const Icon(Icons.schedule),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -292,17 +343,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         index: _currentIndex,
         children: _pages,
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _openDebugClockSheet,
-        backgroundColor: const Color(0xFF17171A),
-        foregroundColor: const Color(0xFFF5F5F5),
-        elevation: 0,
-        label: Text(
-          AppClock.isDebugClockEnabled ? 'Debug Time' : 'Clock',
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        icon: const Icon(Icons.schedule),
-      ),
+      floatingActionButton: _buildClockFab(),
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
           border: Border(
@@ -321,11 +362,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           child: BottomNavigationBar(
             currentIndex: _currentIndex,
-            onTap: (index) {
-              setState(() {
-                _currentIndex = index;
-              });
-            },
+            onTap: _handleTabTap,
             type: BottomNavigationBarType.fixed,
             backgroundColor: const Color(0xFF121214),
             elevation: 0,

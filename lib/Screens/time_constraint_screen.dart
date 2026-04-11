@@ -1,3 +1,5 @@
+// ignore_for_file: unnecessary_underscores
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -20,25 +22,25 @@ class TimeConstraintScreen extends StatefulWidget {
 
 class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
   static const List<String> days = [
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
   ];
 
   static const Map<String, int> dayToDbIndex = {
-    "Monday": 1,
-    "Tuesday": 2,
-    "Wednesday": 3,
-    "Thursday": 4,
-    "Friday": 5,
-    "Saturday": 6,
+    'Monday': 1,
+    'Tuesday': 2,
+    'Wednesday': 3,
+    'Thursday': 4,
+    'Friday': 5,
+    'Saturday': 6,
   };
 
-  final List<int> hours = List.generate(18, (i) => 6 + i); // 6 to 23
-  final double cellHeight = 32.0;
+  final List<int> hours = List.generate(18, (i) => 6 + i); // 6 -> 23
+  final double cellHeight = 34.0;
 
   late Map<String, Set<int>> blockedHours;
   bool loading = true;
@@ -88,9 +90,7 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
         final int endHour = int.parse(endTime.split(':')[0]);
 
         for (int hour = startHour; hour < endHour; hour++) {
-          if (loaded.containsKey(dayName)) {
-            loaded[dayName]!.add(hour);
-          }
+          loaded[dayName]!.add(hour);
         }
       }
 
@@ -100,7 +100,7 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
         loading = false;
       });
     } catch (e) {
-      debugPrint("Error loading blocked hours: $e");
+      debugPrint('Error loading blocked hours: $e');
       if (!mounted) return;
       setState(() {
         loading = false;
@@ -110,11 +110,13 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
 
   void _toggleBlock(String day, int hour) {
     setState(() {
-      if (blockedHours[day]!.contains(hour)) {
-        blockedHours[day]!.remove(hour);
+      final current = blockedHours[day] ?? <int>{};
+      if (current.contains(hour)) {
+        current.remove(hour);
       } else {
-        blockedHours[day]!.add(hour);
+        current.add(hour);
       }
+      blockedHours[day] = current;
     });
   }
 
@@ -141,7 +143,8 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
             'user_id': widget.userId,
             'day_of_week': dayIndex,
             'start_time': '${blockStart.toString().padLeft(2, '0')}:00:00',
-            'end_time': '${(previousHour + 1).toString().padLeft(2, '0')}:00:00',
+            'end_time':
+                '${(previousHour + 1).toString().padLeft(2, '0')}:00:00',
             'label': 'Blocked',
           });
 
@@ -164,6 +167,53 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
     return inserts;
   }
 
+  List<Map<String, dynamic>> _normalizeDetailedGoals() {
+    return widget.detailedGoals.map((goal) {
+      final List<dynamic> rawHabits = goal['habits'] as List<dynamic>? ?? [];
+
+      return {
+        'goal_id': goal['goal_id'],
+        'goal_template_id': goal['goal_template_id'],
+        'title': goal['title'],
+        'category': goal['category'],
+        'description': goal['description'] ?? '',
+        'why': goal['why'] ?? '',
+        'metrics': goal['metrics'] ?? '',
+        'habits': rawHabits.map<Map<String, dynamic>>((habit) {
+          if (habit is Map<String, dynamic>) {
+            return {
+              'habit_id': habit['habit_id'],
+              'habit_template_id': habit['habit_template_id'],
+              'title': habit['title'],
+              'description': habit['description'],
+              'target_frequency': habit['target_frequency'],
+              'duration_minutes': habit['duration_minutes'],
+              'verification_type': habit['verification_type'],
+              'verification_locked': habit['verification_locked'] ?? true,
+              'requires_verifier': habit['requires_verifier'] ?? false,
+              'evidence_type': habit['evidence_type'],
+              'enforcement_level': habit['enforcement_level'],
+              'min_valid_minutes': habit['min_valid_minutes'],
+              'min_completion_ratio': habit['min_completion_ratio'],
+              'max_interruptions': habit['max_interruptions'],
+              'grace_seconds': habit['grace_seconds'],
+              'strict_fail_on_exit': habit['strict_fail_on_exit'] ?? false,
+              'base_points': habit['base_points'],
+              'penalty_points': habit['penalty_points'],
+              'tier_weight': habit['tier_weight'],
+            };
+          }
+
+          return {
+            'title': habit.toString(),
+            'verification_type': 'manual',
+            'evidence_type': 'none',
+          };
+        }).toList(),
+      };
+    }).toList();
+  }
+
   Future<void> _saveAndContinue() async {
     setState(() => saving = true);
 
@@ -183,26 +233,8 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
         'onboarding_step': 4,
       }).eq('id', widget.userId);
 
-      final List<Map<String, dynamic>> goalsWithHabits = widget.detailedGoals
-          .map((goal) {
-            final List<dynamic> rawHabits = goal['habits'] as List<dynamic>? ?? [];
-
-            return {
-              'goal_id': goal['goal_id'],
-              'title': goal['title'],
-              'category': goal['category'],
-              'description': goal['description'],
-              'why': goal['why'],
-              'metrics': goal['metrics'],
-              'habits': rawHabits
-                  .map((habitTitle) => {
-                        'title': habitTitle.toString(),
-                        'duration': 1,
-                      })
-                  .toList(),
-            };
-          })
-          .toList();
+      final List<Map<String, dynamic>> goalsWithHabits =
+          _normalizeDetailedGoals();
 
       if (!mounted) return;
 
@@ -218,11 +250,11 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
         ),
       );
     } catch (e) {
-      debugPrint("Error saving blocked hours: $e");
+      debugPrint('Error saving blocked hours: $e');
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed to save blocked hours: $e")),
+        SnackBar(content: Text('Failed to save blocked hours: $e')),
       );
     } finally {
       if (mounted) {
@@ -232,10 +264,69 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
   }
 
   String _formatHourLabel(int hour) {
-    final int displayHour =
-        hour == 0 ? 12 : hour > 12 ? hour - 12 : hour;
+    final int displayHour = hour == 0 ? 12 : hour > 12 ? hour - 12 : hour;
     final String suffix = hour >= 12 ? 'PM' : 'AM';
     return '$displayHour$suffix';
+  }
+
+  Widget _buildSelectedGoalsPreview() {
+    return SizedBox(
+      height: 116,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: widget.detailedGoals.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 12),
+        itemBuilder: (_, index) {
+          final goal = widget.detailedGoals[index];
+          final String title = (goal['title'] ?? 'Goal').toString();
+          final String category = (goal['category'] ?? 'General').toString();
+          final int habitCount =
+              (goal['habits'] as List<dynamic>? ?? []).length;
+
+          return Container(
+            width: 220,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF17171A),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFF232329)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFFF5F5F5),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  category,
+                  style: const TextStyle(
+                    color: Color(0xFF9A9AA3),
+                    fontSize: 12,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  '$habitCount habit${habitCount == 1 ? '' : 's'}',
+                  style: const TextStyle(
+                    color: Color(0xFFB3B3BB),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -250,19 +341,23 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F0F),
       appBar: AppBar(
-        title: const Text("Blocked Time"),
+        title: const Text('Blocked Time'),
         backgroundColor: const Color(0xFF0F0F0F),
       ),
       body: SafeArea(
         child: Column(
           children: [
             const Padding(
-              padding: EdgeInsets.all(16),
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
               child: Text(
-                "Select times when you are unavailable.\nYour habits will be scheduled around these blocks.",
+                'Select times when you are unavailable.\nYour habits will be scheduled around these blocks.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white, fontSize: 16),
               ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+              child: _buildSelectedGoalsPreview(),
             ),
             Expanded(
               child: SingleChildScrollView(
@@ -284,7 +379,7 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
                           ),
                           const SizedBox(height: 8),
                           SizedBox(
-                            height: MediaQuery.of(context).size.height * 0.6,
+                            height: MediaQuery.of(context).size.height * 0.48,
                             child: SingleChildScrollView(
                               child: Column(
                                 children: hours.map((hour) {
@@ -293,8 +388,12 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
 
                                   return GestureDetector(
                                     onTap: () => _toggleBlock(day, hour),
-                                    child: Container(
-                                      margin: const EdgeInsets.symmetric(vertical: 2),
+                                    child: AnimatedContainer(
+                                      duration:
+                                          const Duration(milliseconds: 120),
+                                      margin: const EdgeInsets.symmetric(
+                                        vertical: 2,
+                                      ),
                                       width: 68,
                                       height: cellHeight,
                                       alignment: Alignment.center,
@@ -314,6 +413,9 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
                                               ? Colors.white
                                               : Colors.white70,
                                           fontSize: 12,
+                                          fontWeight: isBlocked
+                                              ? FontWeight.w700
+                                              : FontWeight.w400,
                                         ),
                                       ),
                                     ),
@@ -334,7 +436,7 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
               child: saving
                   ? const Center(child: CircularProgressIndicator())
                   : PrimaryButton(
-                      text: "Continue",
+                      text: 'Continue',
                       onPressed: _saveAndContinue,
                     ),
             ),
