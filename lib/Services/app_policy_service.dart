@@ -1,5 +1,3 @@
-// ignore_for_file: dead_code
-
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AppPolicyService {
@@ -10,8 +8,6 @@ class AppPolicyService {
     'com.achievr.app',
     'achievr',
   };
-
-  static const int _maxAllowedAppsPerHabit = 2;
 
   String get _userId {
     final user = _supabase.auth.currentUser;
@@ -95,7 +91,12 @@ class AppPolicyService {
         .eq('active', true)
         .order('app_label', ascending: true);
 
-    return List<Map<String, dynamic>>.from(response);
+    final rows = List<Map<String, dynamic>>.from(response);
+
+    return rows.where((row) {
+      final id = (row['app_identifier'] ?? '').toString().trim();
+      return id.isNotEmpty && !_achievrAppIds.contains(id);
+    }).toList();
   }
 
   Future<Map<String, dynamic>> fetchFullAppPolicyForHabit({
@@ -120,11 +121,10 @@ class AppPolicyService {
         'policy_mode': snapshot['app_policy_mode'],
         'leave_grace_seconds': snapshot['leave_grace_seconds'],
       },
-      'allowed_apps': snapshot['allowed_apps_full'],
+      'allowed_apps': snapshot['selected_allowed_apps_full'],
       'supports_app_policy': true,
       'screen_off_allowed': snapshot['allow_screen_off'],
       'is_default_policy': snapshot['is_default_policy'],
-      'max_allowed_apps': _maxAllowedAppsPerHabit,
     };
   }
 
@@ -138,6 +138,8 @@ class AppPolicyService {
 
     _validatePolicyMode(policyMode);
 
+    final safeGraceSeconds = leaveGraceSeconds.clamp(0, 3600);
+
     final habit = await fetchHabitById(habitId: habitId);
     if (habit == null) {
       throw Exception('Habit not found.');
@@ -149,41 +151,28 @@ class AppPolicyService {
       );
     }
 
-    final computedGraceSeconds = _computeGraceSecondsFromHabit(habit);
+    final existing = await fetchHabitAppPolicy(habitId: habitId);
 
-    await _supabase.from('habit_app_policies').upsert(
-      {
-        'habit_id': habitId,
-        'user_id': userId,
-        'policy_mode': policyMode,
-        'leave_grace_seconds': computedGraceSeconds,
-        'active': true,
-      },
-      onConflict: 'habit_id',
-    );
-  }
-
-  Future<void> syncComputedGraceForHabit({
-    required String habitId,
-  }) async {
-    final habit = await fetchHabitById(habitId: habitId);
-    if (habit == null) {
-      throw Exception('Habit not found.');
-    }
-
-    if (!_habitSupportsAppPolicy(habit)) {
+    if (existing != null) {
+      await _supabase
+          .from('habit_app_policies')
+          .update({
+            'policy_mode': policyMode,
+            'leave_grace_seconds': safeGraceSeconds,
+            'active': true,
+            'updated_at': DateTime.now().toIso8601String(),
+          })
+          .eq('habit_app_policy_id', existing['habit_app_policy_id']);
       return;
     }
 
-    final existing = await fetchHabitAppPolicy(habitId: habitId);
-    if (existing == null) return;
-
-    final computedGraceSeconds = _computeGraceSecondsFromHabit(habit);
-
-    await _supabase.from('habit_app_policies').update({
-      'leave_grace_seconds': computedGraceSeconds,
-      'updated_at': DateTime.now().toIso8601String(),
-    }).eq('habit_id', habitId);
+    await _supabase.from('habit_app_policies').insert({
+      'habit_id': habitId,
+      'user_id': userId,
+      'policy_mode': policyMode,
+      'leave_grace_seconds': safeGraceSeconds,
+      'active': true,
+    });
   }
 
   Future<void> removeHabitAppPolicy({
@@ -201,6 +190,8 @@ class AppPolicyService {
     required String appLabel,
   }) async {
     final userId = _userId;
+    final cleanIdentifier = appIdentifier.trim();
+    final cleanLabel = appLabel.trim();
 
     final habit = await fetchHabitById(habitId: habitId);
     if (habit == null) {
@@ -222,25 +213,30 @@ class AppPolicyService {
       );
     }
 
-    if (appIdentifier.trim().isEmpty || appLabel.trim().isEmpty) {
+    if (cleanIdentifier.isEmpty || cleanLabel.isEmpty) {
       throw Exception('App identifier and app label are required.');
     }
 
-    final currentApps = await fetchAllowedAppsForHabit(habitId: habitId);
-    final existingPackages = currentApps
-        .map((app) => (app['app_identifier'] ?? '').toString())
-        .toSet();
-
-    if (!existingPackages.contains(appIdentifier.trim()) &&
-        currentApps.length >= _maxAllowedAppsPerHabit) {
-      throw Exception('You can only allow up to 2 apps for a focus habit.');
+    if (_achievrAppIds.contains(cleanIdentifier)) {
+      throw Exception('Achievr is already always allowed.');
     }
 
-    await _supabase.from('habit_allowed_apps').upsert({
+    final existingSelectedApps =
+        List<Map<String, dynamic>>.from(
+      snapshot['selected_allowed_apps_full'] ?? [],
+    );
+
+    if (existingSelectedApps.isNotEmpty) {
+      throw Exception(
+        'Only one extra app can be allowed for a focus habit. Remove the current one first.',
+      );
+    }
+
+    await _supabase.from('habit_allowed_apps').insert({
       'habit_id': habitId,
       'user_id': userId,
-      'app_identifier': appIdentifier.trim(),
-      'app_label': appLabel.trim(),
+      'app_identifier': cleanIdentifier,
+      'app_label': cleanLabel,
       'active': true,
     });
   }
@@ -269,16 +265,17 @@ class AppPolicyService {
       );
     }
 
-    final cleanedApps = apps
+    final filtered = apps
         .where(
           (app) =>
               (app['app_identifier'] ?? '').trim().isNotEmpty &&
-              (app['app_label'] ?? '').trim().isNotEmpty,
+              (app['app_label'] ?? '').trim().isNotEmpty &&
+              !_achievrAppIds.contains((app['app_identifier'] ?? '').trim()),
         )
         .toList();
 
-    if (cleanedApps.length > _maxAllowedAppsPerHabit) {
-      throw Exception('You can only allow up to 2 apps for a focus habit.');
+    if (filtered.length > 1) {
+      throw Exception('Only one extra app can be allowed for a focus habit.');
     }
 
     await _supabase
@@ -286,25 +283,17 @@ class AppPolicyService {
         .delete()
         .eq('habit_id', habitId);
 
-    if (cleanedApps.isEmpty) return;
+    if (filtered.isEmpty) return;
 
     final userId = _userId;
 
-    final inserts = cleanedApps
-        .map(
-          (app) => {
-            'habit_id': habitId,
-            'user_id': userId,
-            'app_identifier': app['app_identifier']!.trim(),
-            'app_label': app['app_label']!.trim(),
-            'active': true,
-          },
-        )
-        .toList();
-
-    if (inserts.isNotEmpty) {
-      await _supabase.from('habit_allowed_apps').insert(inserts);
-    }
+    await _supabase.from('habit_allowed_apps').insert({
+      'habit_id': habitId,
+      'user_id': userId,
+      'app_identifier': filtered.first['app_identifier']!.trim(),
+      'app_label': filtered.first['app_label']!.trim(),
+      'active': true,
+    });
   }
 
   Future<Map<String, dynamic>> assertCanRunFocusWithApp({
@@ -328,19 +317,19 @@ class AppPolicyService {
 
     final policyMode =
         (snapshot['app_policy_mode'] ?? 'achievr_only').toString();
-    final allowScreenOff =
-        (snapshot['allow_screen_off'] as bool?) ?? true;
+    final allowScreenOff = (snapshot['allow_screen_off'] as bool?) ?? true;
+    final cleanForeground = foregroundAppIdentifier.trim();
 
     if (isScreenOff) {
       return {
         'allowed': allowScreenOff,
         'reason': allowScreenOff
-            ? 'Screen off is allowed for this session.'
-            : 'Screen off is not allowed for this session.',
+            ? 'Screen off is allowed.'
+            : 'Screen off is not allowed.',
       };
     }
 
-    if (_achievrAppIds.contains(foregroundAppIdentifier)) {
+    if (_achievrAppIds.contains(cleanForeground)) {
       return {
         'allowed': true,
         'reason': 'Achievr is always allowed.',
@@ -350,23 +339,23 @@ class AppPolicyService {
     if (policyMode == 'achievr_only') {
       return {
         'allowed': false,
-        'reason': 'Only Achievr is allowed during this session.',
+        'reason': 'Only Achievr is allowed.',
       };
     }
 
     if (policyMode == 'allow_list') {
       final allowedIdentifiers =
-          (snapshot['allowed_app_identifiers'] as List<dynamic>? ?? [])
+          (snapshot['selected_allowed_app_identifiers'] as List<dynamic>? ?? [])
               .map((e) => e.toString())
               .toSet();
 
-      final isAllowed = allowedIdentifiers.contains(foregroundAppIdentifier);
+      final isAllowed = allowedIdentifiers.contains(cleanForeground);
 
       return {
         'allowed': isAllowed,
         'reason': isAllowed
-            ? 'This app is on the allowed list.'
-            : 'This app is not on the allowed list for this session.',
+            ? 'This app is allowed.'
+            : 'This app is not allowed for this habit.',
       };
     }
 
@@ -391,53 +380,48 @@ class AppPolicyService {
         'allow_screen_off': true,
         'allowed_app_identifiers': const <String>[],
         'allowed_app_labels': const <String>[],
-        'allowed_apps_full': const <Map<String, dynamic>>[],
+        'selected_allowed_app_identifiers': const <String>[],
+        'selected_allowed_app_labels': const <String>[],
+        'selected_allowed_apps_full': const <Map<String, dynamic>>[],
         'is_default_policy': false,
-        'max_allowed_apps': _maxAllowedAppsPerHabit,
       };
     }
 
     final policy = await fetchHabitAppPolicy(habitId: habitId);
-    final allowedApps = await fetchAllowedAppsForHabit(habitId: habitId);
+    final selectedAllowedApps =
+        await fetchAllowedAppsForHabit(habitId: habitId);
 
     final resolvedMode = _resolveEffectivePolicyMode(policy);
-    final computedGraceSeconds = _computeGraceSecondsFromHabit(habit);
-    final storedGraceSeconds =
-        _coerceInt(policy?['leave_grace_seconds']) ?? computedGraceSeconds;
+    final resolvedGraceSeconds =
+        (_coerceInt(policy?['leave_grace_seconds']) ?? 30).clamp(0, 3600);
 
-    final effectiveGraceSeconds =
-        storedGraceSeconds > 0 ? storedGraceSeconds : computedGraceSeconds;
+    final selectedIdentifiers = selectedAllowedApps
+        .map((app) => (app['app_identifier'] ?? '').toString())
+        .where((id) => id.isNotEmpty)
+        .toList();
+
+    final selectedLabels = selectedAllowedApps
+        .map((app) => (app['app_label'] ?? '').toString())
+        .where((label) => label.isNotEmpty)
+        .toList();
 
     return {
       'app_policy_mode': resolvedMode,
-      'leave_grace_seconds': effectiveGraceSeconds,
+      'leave_grace_seconds': resolvedGraceSeconds,
       'allow_screen_off': true,
-      'allowed_app_identifiers': allowedApps
-          .map((app) => (app['app_identifier'] ?? '').toString())
-          .where((id) => id.isNotEmpty)
-          .toList(),
-      'allowed_app_labels': allowedApps
-          .map((app) => (app['app_label'] ?? '').toString())
-          .where((label) => label.isNotEmpty)
-          .toList(),
-      'allowed_apps_full': allowedApps,
+      'allowed_app_identifiers': [
+        ..._achievrAppIds,
+        ...selectedIdentifiers,
+      ],
+      'allowed_app_labels': [
+        'Achievr',
+        ...selectedLabels,
+      ],
+      'selected_allowed_app_identifiers': selectedIdentifiers,
+      'selected_allowed_app_labels': selectedLabels,
+      'selected_allowed_apps_full': selectedAllowedApps,
       'is_default_policy': policy == null,
-      'max_allowed_apps': _maxAllowedAppsPerHabit,
     };
-  }
-
-  int _computeGraceSecondsFromHabit(Map<String, dynamic> habit) {
-    final minValidMinutes = _coerceInt(habit['min_valid_minutes']);
-    final durationMinutes = _coerceInt(habit['duration_minutes']);
-
-    final requiredMinutes = (minValidMinutes != null && minValidMinutes > 0)
-        ? minValidMinutes
-        : (durationMinutes != null && durationMinutes > 0)
-            ? durationMinutes
-            : 12;
-
-    final derivedGraceMinutes = (requiredMinutes / 12).round().clamp(1, 10);
-    return derivedGraceMinutes * 60;
   }
 
   String _resolveEffectivePolicyMode(Map<String, dynamic>? policy) {

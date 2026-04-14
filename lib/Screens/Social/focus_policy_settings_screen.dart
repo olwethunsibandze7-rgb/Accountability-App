@@ -1,3 +1,5 @@
+// ignore_for_file: use_build_context_synchronously
+
 import 'package:achievr_app/Services/app_policy_service.dart';
 import 'package:achievr_app/Services/installed_apps_service.dart';
 import 'package:flutter/material.dart';
@@ -105,6 +107,67 @@ class _FocusPolicySettingsScreenState
 
   int get _derivedGraceMinutes => (_leaveGraceSeconds / 60).round();
 
+  Future<void> _setPolicyMode(String value) async {
+    if (_isSaving || _policyMode == value) return;
+
+    final previousMode = _policyMode;
+    final previousAllowedApps = List<Map<String, dynamic>>.from(_allowedApps);
+
+    try {
+      setState(() {
+        _policyMode = value;
+        _isSaving = true;
+        _error = null;
+      });
+
+      await _appPolicyService.upsertHabitAppPolicy(
+        habitId: widget.habitId,
+        policyMode: value,
+        leaveGraceSeconds: _leaveGraceSeconds,
+        allowScreenOff: _allowScreenOff,
+      );
+
+      if (value == 'achievr_only' && previousAllowedApps.isNotEmpty) {
+        await _appPolicyService.replaceAllowedAppsForHabit(
+          habitId: widget.habitId,
+          apps: const [],
+        );
+      }
+
+      await _loadPolicy();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            value == 'achievr_only'
+                ? 'Switched to Achievr-only mode.'
+                : 'Switched to allow-list mode.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _policyMode = previousMode;
+        _allowedApps = previousAllowedApps;
+        _error = e.toString();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to update strictness: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
   Future<void> _savePolicy() async {
     if (!_supportsFocusPolicy) return;
 
@@ -128,146 +191,160 @@ class _FocusPolicySettingsScreenState
         );
       }
 
-      if (!mounted) return;
+      await _loadPolicy();
 
-      setState(() {
-        _isSaving = false;
-      });
+      if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Focus policy saved.')),
       );
-
-      await _loadPolicy();
     } catch (e) {
       if (!mounted) return;
 
       setState(() {
-        _isSaving = false;
         _error = e.toString();
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to save focus policy: $e')),
       );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
     }
   }
 
-Future<void> _addAllowedApp() async {
-  if (_policyMode != 'allow_list') {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Switch to allow-list mode before adding apps.'),
-      ),
-    );
-    return;
-  }
+  Future<void> _addAllowedApp() async {
+    if (_policyMode != 'allow_list') {
+      try {
+        setState(() {
+          _isSaving = true;
+          _error = null;
+        });
 
-  if (_allowedApps.length >= 2) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('You can only allow up to 2 apps for a focus habit.'),
-      ),
-    );
-    return;
-  }
+        await _appPolicyService.upsertHabitAppPolicy(
+          habitId: widget.habitId,
+          policyMode: 'allow_list',
+          leaveGraceSeconds: _leaveGraceSeconds,
+          allowScreenOff: _allowScreenOff,
+        );
 
-  try {
-    setState(() {
-      _isLoadingInstalledApps = true;
-      _error = null;
-    });
+        await _loadPolicy();
+      } catch (e) {
+        if (!mounted) return;
 
-    // Make sure the backend policy row is already saved as allow_list
-    await _appPolicyService.upsertHabitAppPolicy(
-      habitId: widget.habitId,
-      policyMode: 'allow_list',
-      leaveGraceSeconds: _leaveGraceSeconds,
-      allowScreenOff: _allowScreenOff,
-    );
+        setState(() {
+          _error = e.toString();
+        });
 
-    final installedApps = await _installedAppsService.getLaunchableApps();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to switch to allow-list mode: $e')),
+        );
+        return;
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isSaving = false;
+          });
+        }
+      }
+    }
 
-    if (!mounted) return;
-
-    setState(() {
-      _isLoadingInstalledApps = false;
-    });
-
-    if (installedApps.isEmpty) {
+    if (_allowedApps.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('No installed apps were found.'),
+          content: Text(
+            'Only one extra app can be allowed. Achievr is already always allowed.',
+          ),
         ),
       );
       return;
     }
 
-    final alreadyAddedPackages = _allowedApps
-        .map((app) => (app['app_identifier'] ?? '').toString())
-        .toSet();
+    try {
+      setState(() {
+        _isLoadingInstalledApps = true;
+        _error = null;
+      });
 
-    final filteredApps = installedApps
-        .where(
-          (app) => !alreadyAddedPackages.contains(app['package_name'] ?? ''),
-        )
-        .toList();
+      final installedApps = await _installedAppsService.getLaunchableApps();
 
-    if (filteredApps.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('All available apps are already in the allow list.'),
-        ),
-      );
-      return;
-    }
+      if (!mounted) return;
 
-    final selected = await _showInstalledAppPicker(filteredApps);
-    if (selected == null) return;
-
-    final label = (selected['app_label'] ?? '').trim();
-    final identifier = (selected['package_name'] ?? '').trim();
-
-    if (label.isEmpty || identifier.isEmpty) return;
-
-    setState(() {
-      _isReplacingApps = true;
-    });
-
-    await _appPolicyService.addAllowedAppToHabit(
-      habitId: widget.habitId,
-      appIdentifier: identifier,
-      appLabel: label,
-    );
-
-    await _loadPolicy();
-
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$label added to allowed apps.')),
-    );
-  } catch (e) {
-    if (!mounted) return;
-
-    setState(() {
-      _isLoadingInstalledApps = false;
-      _isReplacingApps = false;
-      _error = e.toString();
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Failed to load installed apps: $e')),
-    );
-  } finally {
-    if (mounted) {
       setState(() {
         _isLoadingInstalledApps = false;
-        _isReplacingApps = false;
       });
+
+      if (installedApps.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No installed apps were found.')),
+        );
+        return;
+      }
+
+      final filteredApps = installedApps
+          .where(
+            (app) =>
+                (app['package_name'] ?? '') != 'com.example.achievr_app' &&
+                (app['package_name'] ?? '') != 'com.achievr.app' &&
+                (app['package_name'] ?? '') != 'achievr',
+          )
+          .toList();
+
+      if (filteredApps.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No eligible apps remain to add.')),
+        );
+        return;
+      }
+
+      final selected = await _showInstalledAppPicker(filteredApps);
+      if (selected == null) return;
+
+      final label = (selected['app_label'] ?? '').trim();
+      final identifier = (selected['package_name'] ?? '').trim();
+
+      if (label.isEmpty || identifier.isEmpty) return;
+
+      setState(() {
+        _isReplacingApps = true;
+      });
+
+      await _appPolicyService.addAllowedAppToHabit(
+        habitId: widget.habitId,
+        appIdentifier: identifier,
+        appLabel: label,
+      );
+
+      await _loadPolicy();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$label added as the one extra allowed app.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _error = e.toString();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load installed apps: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingInstalledApps = false;
+          _isReplacingApps = false;
+        });
+      }
     }
   }
-}
 
   Future<Map<String, String>?> _showInstalledAppPicker(
     List<Map<String, String>> apps,
@@ -321,7 +398,7 @@ Future<void> _addAllowedApp() async {
                       ),
                       const SizedBox(height: 8),
                       const Text(
-                        'Select up to 2 apps the user is allowed to use during this focus session.',
+                        'Achievr is already always allowed. Select one extra app.',
                         style: TextStyle(
                           color: Color(0xFFB3B3BB),
                           height: 1.35,
@@ -415,6 +492,7 @@ Future<void> _addAllowedApp() async {
     try {
       setState(() {
         _isReplacingApps = true;
+        _error = null;
       });
 
       await _appPolicyService.removeAllowedAppFromHabit(
@@ -433,7 +511,7 @@ Future<void> _addAllowedApp() async {
       if (!mounted) return;
 
       setState(() {
-        _isReplacingApps = false;
+        _error = e.toString();
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -500,24 +578,18 @@ Future<void> _addAllowedApp() async {
     final selected = _policyMode == value;
 
     return InkWell(
-      onTap: _isSaving
-          ? null
-          : () {
-              setState(() {
-                _policyMode = value;
-              });
-            },
+      onTap: (_isSaving || selected) ? null : () => _setPolicyMode(value),
       borderRadius: BorderRadius.circular(14),
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
         margin: const EdgeInsets.only(top: 10),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: selected ? const Color(0x22F5F5F5) : const Color(0xFF101013),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: selected
-                ? const Color(0xFFF5F5F5)
-                : const Color(0xFF232329),
+            color:
+                selected ? const Color(0xFFF5F5F5) : const Color(0xFF232329),
           ),
         ),
         child: Row(
@@ -656,9 +728,9 @@ Future<void> _addAllowedApp() async {
                 ),
               ),
               const SizedBox(height: 6),
-              Text(
-                'Focus policy only applies to focus verification habits.',
-                style: const TextStyle(
+              const Text(
+                'Achievr is always allowed. You can keep this habit in Achievr-only mode or add one extra intended app.',
+                style: TextStyle(
                   color: Color(0xFFB3B3BB),
                   fontSize: 13,
                   height: 1.35,
@@ -685,7 +757,7 @@ Future<void> _addAllowedApp() async {
               _buildSectionTitle(
                 'Strictness',
                 subtitle:
-                    'Choose whether the user can stay only in Achievr or in Achievr plus selected apps.',
+                    'Choose whether the user can stay only in Achievr or in Achievr plus one selected app.',
               ),
               _buildModeTile(
                 value: 'achievr_only',
@@ -695,9 +767,9 @@ Future<void> _addAllowedApp() async {
               ),
               _buildModeTile(
                 value: 'allow_list',
-                title: 'Allow selected app(s)',
+                title: 'Allow one selected app',
                 subtitle:
-                    'Achievr, screen off, and up to 2 selected apps are valid during the focus session.',
+                    'Achievr, screen off, and one selected app are valid during the focus session.',
               ),
             ],
           ),
@@ -710,7 +782,7 @@ Future<void> _addAllowedApp() async {
               _buildSectionTitle(
                 'Grace period',
                 subtitle:
-                    'Grace is automatically derived from the task’s required time and cannot be edited manually.',
+                    'Grace is derived from the task setup and saved with the policy.',
               ),
               Container(
                 width: double.infinity,
@@ -739,15 +811,6 @@ Future<void> _addAllowedApp() async {
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Rule: about 1 minute of grace for every 12 minutes of required task time.',
-                      style: TextStyle(
-                        color: Color(0xFFB3B3BB),
-                        fontSize: 12,
-                        height: 1.35,
-                      ),
-                    ),
                   ],
                 ),
               ),
@@ -760,10 +823,10 @@ Future<void> _addAllowedApp() async {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildSectionTitle(
-                'Allowed apps',
+                'Allowed app',
                 subtitle: _policyMode == 'allow_list'
-                    ? 'Only these apps are permitted besides Achievr. Maximum 2 apps.'
-                    : 'Switch to allow-list mode to configure up to 2 habit-specific apps.',
+                    ? 'Choose one extra intended app. Achievr remains allowed automatically.'
+                    : 'Switch to allow-list mode to configure one extra app.',
               ),
               if (_policyMode != 'allow_list')
                 const Text(
@@ -775,28 +838,28 @@ Future<void> _addAllowedApp() async {
                 ),
               if (_policyMode == 'allow_list' && _allowedApps.isEmpty)
                 const Text(
-                  'No allowed apps added yet.',
+                  'No extra allowed app added yet.',
                   style: TextStyle(
                     color: Color(0xFF9A9AA3),
                     fontSize: 13,
                   ),
                 ),
-              if (_policyMode == 'allow_list')
-                ..._allowedApps.map(_buildAllowedAppCard),
+              if (_policyMode == 'allow_list') ..._allowedApps.map(_buildAllowedAppCard),
               if (_policyMode == 'allow_list') ...[
                 const SizedBox(height: 14),
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
-                    onPressed:
-                        (_isReplacingApps ||
-                                _isLoadingInstalledApps ||
-                                _allowedApps.length >= 2)
-                            ? null
-                            : _addAllowedApp,
+                    onPressed: (_isReplacingApps ||
+                            _isLoadingInstalledApps ||
+                            _isSaving ||
+                            _allowedApps.isNotEmpty)
+                        ? null
+                        : _addAllowedApp,
                     style: OutlinedButton.styleFrom(
                       foregroundColor: const Color(0xFFF5F5F5),
                       side: const BorderSide(color: Color(0xFF3A3A42)),
+                      disabledForegroundColor: const Color(0xFF7C7C84),
                     ),
                     icon: (_isReplacingApps || _isLoadingInstalledApps)
                         ? const SizedBox(
@@ -808,9 +871,9 @@ Future<void> _addAllowedApp() async {
                     label: Text(
                       _isLoadingInstalledApps
                           ? 'Loading apps...'
-                          : _allowedApps.length >= 2
-                              ? 'Maximum apps reached'
-                              : 'Choose allowed app',
+                          : _allowedApps.isNotEmpty
+                              ? 'Extra app already selected'
+                              : 'Choose extra app',
                     ),
                   ),
                 ),
@@ -826,6 +889,8 @@ Future<void> _addAllowedApp() async {
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFF5F5F5),
               foregroundColor: Colors.black,
+              disabledBackgroundColor: const Color(0xFF2A2A2F),
+              disabledForegroundColor: const Color(0xFF6F6F76),
             ),
             icon: _isSaving
                 ? const SizedBox(

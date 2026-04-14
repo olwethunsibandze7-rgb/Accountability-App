@@ -1,28 +1,33 @@
-// ignore_for_file: unused_local_variable
+// ignore_for_file: unused_local_variable, unused_element, use_build_context_synchronously
 
 import 'dart:async';
 
+import 'package:achievr_app/Providers/focus_session_provider.dart';
 import 'package:achievr_app/Screens/Dashboard/focus_mode_screen.dart';
+import 'package:achievr_app/Screens/Social/set_habit_location_screen.dart';
 import 'package:achievr_app/Screens/habit_log_service.dart';
 import 'package:achievr_app/Services/app_clock.dart';
+import 'package:achievr_app/Services/habit_location_service.dart';
 import 'package:achievr_app/Services/location_runtime_service.dart';
 import 'package:achievr_app/Services/verification_service.dart';
 import 'package:achievr_app/Widgets/hold_to_refresh_wrapper.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class TodayScreen extends StatefulWidget {
+class TodayScreen extends ConsumerStatefulWidget {
   const TodayScreen({super.key});
 
   @override
-  State<TodayScreen> createState() => _TodayScreenState();
+  ConsumerState<TodayScreen> createState() => _TodayScreenState();
 }
 
-class _TodayScreenState extends State<TodayScreen> {
+class _TodayScreenState extends ConsumerState<TodayScreen> {
   final SupabaseClient supabase = Supabase.instance.client;
   final HabitLogService _habitLogService = HabitLogService();
   final VerificationService _verificationService = VerificationService();
+  final HabitLocationService _habitLocationService = HabitLocationService();
   final LocationRuntimeService _locationRuntimeService =
       LocationRuntimeService();
 
@@ -181,6 +186,177 @@ class _TodayScreenState extends State<TodayScreen> {
     }
   }
 
+  String _verificationType(Map<String, dynamic> log) {
+    return (log['verification_type'] ?? 'manual').toString();
+  }
+
+  String? _extractHabitId(Map<String, dynamic> log) {
+    final habit = log['habits'];
+
+    if (habit is Map<String, dynamic>) {
+      return habit['habit_id']?.toString();
+    }
+
+    if (habit is Map) {
+      return habit['habit_id']?.toString();
+    }
+
+    return log['habit_id']?.toString();
+  }
+
+  String _extractHabitTitle(Map<String, dynamic> log) {
+    final habit = log['habits'];
+
+    if (habit is Map<String, dynamic>) {
+      return (habit['title'] ?? 'Habit').toString();
+    }
+
+    if (habit is Map) {
+      return (habit['title'] ?? 'Habit').toString();
+    }
+
+    return (log['habit_title'] ?? 'Habit').toString();
+  }
+
+  bool _isFocusVerification(String type) {
+    return type == 'focus_auto' ||
+        type == 'focus_partner' ||
+        type == 'location_focus' ||
+        type == 'location_focus_partner';
+  }
+
+  bool _isPartnerOnlyVerification(String type) {
+    return type == 'partner' || type == 'location_partner';
+  }
+
+  bool _needsLocationVerification(String type) {
+    return _habitLocationService.habitRequiresLocation(type);
+  }
+
+  Future<bool> _ensurePinnedLocationConfiguredForLog(
+    Map<String, dynamic> log,
+  ) async {
+    final verificationType = _verificationType(log);
+    if (!_needsLocationVerification(verificationType)) {
+      return true;
+    }
+
+    final habitId = _extractHabitId(log);
+    final habitTitle = _extractHabitTitle(log);
+
+    if (habitId == null || habitId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This task is missing a habit id.')),
+      );
+      return false;
+    }
+
+    final config = await _habitLocationService.fetchHabitLocationConfig(
+      habitId: habitId,
+    );
+
+    if (config != null) {
+      return true;
+    }
+
+    if (!mounted) return false;
+
+    final shouldConfigure = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: const Color(0xFF17171A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Location setup required',
+                  style: TextStyle(
+                    color: Color(0xFFF5F5F5),
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  '$habitTitle uses location-based verification. Set the pinned place first before starting or submitting this task.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFFB3B3BB),
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFF5F5F5),
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    child: const Text('Set location'),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFF5F5F5),
+                      side: const BorderSide(color: Color(0xFF3A3A42)),
+                    ),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (shouldConfigure != true) {
+      return false;
+    }
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SetHabitLocationScreen(
+          habitId: habitId,
+          habitTitle: habitTitle,
+          verificationType: verificationType,
+        ),
+      ),
+    );
+
+    if (!mounted) return false;
+
+    final updatedConfig = await _habitLocationService.fetchHabitLocationConfig(
+      habitId: habitId,
+    );
+
+    if (updatedConfig == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pinned location is still required for this task.'),
+        ),
+      );
+      return false;
+    }
+
+    return true;
+  }
+
   Future<void> _markLogDone(Map<String, dynamic> log) async {
     final logId = log['log_id']?.toString();
     if (logId == null || logId.isEmpty) return;
@@ -227,39 +403,49 @@ class _TodayScreenState extends State<TodayScreen> {
     }
   }
 
-    Future<void> _openFocusMode(Map<String, dynamic> log) async {
-      final status = (log['status'] ?? '').toString();
+  Future<void> _openFocusMode(Map<String, dynamic> log) async {
+    final status = (log['status'] ?? '').toString();
 
-      const blockedStatuses = {
-        'done',
-        'failed',
-        'missed',
-        'rejected',
-        'submitted',
-      };
+    const blockedStatuses = {
+      'done',
+      'failed',
+      'missed',
+      'rejected',
+      'submitted',
+    };
 
-      if (blockedStatuses.contains(status)) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'This task is already closed with status: $status.',
-            ),
+    if (blockedStatuses.contains(status)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'This task is already closed with status: $status.',
           ),
-        );
-        return;
-      }
-
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => FocusModeScreen(log: log),
         ),
       );
-
-      if (!mounted) return;
-      await _loadTodayData();
+      return;
     }
+
+    final hasLocationConfig = await _ensurePinnedLocationConfiguredForLog(log);
+    if (!hasLocationConfig) return;
+
+    final coordinator = ref.read(focusSessionCoordinatorProvider);
+    final requestedLogId = log['log_id']?.toString();
+
+    if (!coordinator.isSameActiveLog(requestedLogId)) {
+      await coordinator.attachToLog(log);
+    }
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FocusModeScreen(log: log),
+      ),
+    );
+
+    if (!mounted) return;
+    await _loadTodayData();
+  }
 
   Future<void> _submitPartnerVerification(Map<String, dynamic> log) async {
     final logId = log['log_id']?.toString();
@@ -275,6 +461,9 @@ class _TodayScreenState extends State<TodayScreen> {
       );
       return;
     }
+
+    final hasLocationConfig = await _ensurePinnedLocationConfiguredForLog(log);
+    if (!hasLocationConfig) return;
 
     final bool requiresLocation = verificationType == 'location_partner' ||
         verificationType == 'location_focus_partner';
@@ -705,29 +894,48 @@ class _TodayScreenState extends State<TodayScreen> {
     ..sort(_compareLogsByStartTime);
 
   Map<String, dynamic>? get _nextTask {
-    final pendingLogs = todayLogs
+    final candidates = todayLogs
         .where((log) {
           final state = _taskState(log);
-          return state != 'done' &&
-              state != 'missed' &&
-              state != 'failed' &&
-              state != 'rejected';
+          return state == 'soon' ||
+              state == 'upcoming' ||
+              state == 'submitted' ||
+              state == 'pending_verification';
         })
         .toList()
       ..sort(_compareLogsByStartTime);
 
-    for (final log in pendingLogs) {
-      final state = _taskState(log);
-      if (state == 'available' ||
-          state == 'soon' ||
-          state == 'upcoming' ||
-          state == 'submitted' ||
-          state == 'pending_verification') {
-        return log;
-      }
-    }
+    if (candidates.isEmpty) return null;
+    return candidates.first;
+  }
 
-    return null;
+  List<Map<String, dynamic>> get _laterTodayLogs {
+    final nextTask = _nextTask;
+    final nextLogId = nextTask?['log_id']?.toString();
+
+    return _upcomingLogs.where((log) {
+      return log['log_id']?.toString() != nextLogId;
+    }).toList();
+  }
+
+  Map<String, dynamic>? get _sharedActiveFocusLog {
+    final focusState = ref.watch(focusSessionCoordinatorProvider).state;
+    if (!focusState.hasLiveSession) return null;
+    return focusState.log;
+  }
+
+  Map<String, dynamic>? get _availableFocusLog {
+    final focusLogs = _availableLogs
+        .where((log) => _isFocusVerification(_verificationType(log)))
+        .toList()
+      ..sort(_compareLogsByStartTime);
+
+    if (focusLogs.isEmpty) return null;
+    return focusLogs.first;
+  }
+
+  Map<String, dynamic>? get _focusModeEntryLog {
+    return _sharedActiveFocusLog ?? _availableFocusLog;
   }
 
   String _timeUntil(DateTime start) {
@@ -756,10 +964,6 @@ class _TodayScreenState extends State<TodayScreen> {
     final state = _taskState(log);
     final start = _logStartDateTime(log);
 
-    if (state == 'available') {
-      return 'This task is available to execute now.';
-    }
-
     if (state == 'submitted' || state == 'pending_verification') {
       return 'This task is waiting for verifier review.';
     }
@@ -768,47 +972,17 @@ class _TodayScreenState extends State<TodayScreen> {
       return start != null ? _timeUntil(start) : 'Scheduled for later today';
     }
 
-    if (state == 'missed' || state == 'failed') {
-      return 'This task did not clear its execution window.';
-    }
-
     return 'Scheduled for today';
   }
 
   int get _doneCount => _completedLogs.length;
   int get _pendingCount => todayLogs.where((log) {
         final state = _taskState(log);
-        return state != 'done' && state != 'missed' && state != 'failed';
+        return state != 'done' &&
+            state != 'missed' &&
+            state != 'failed' &&
+            state != 'rejected';
       }).length;
-
-  String _verificationType(Map<String, dynamic> log) {
-    return (log['verification_type'] ?? 'manual').toString();
-  }
-
-  String? _extractHabitId(Map<String, dynamic> log) {
-    final habit = log['habits'];
-
-    if (habit is Map<String, dynamic>) {
-      return habit['habit_id']?.toString();
-    }
-
-    if (habit is Map) {
-      return habit['habit_id']?.toString();
-    }
-
-    return log['habit_id']?.toString();
-  }
-
-  bool _isFocusVerification(String type) {
-    return type == 'focus_auto' ||
-        type == 'focus_partner' ||
-        type == 'location_focus' ||
-        type == 'location_focus_partner';
-  }
-
-  bool _isPartnerOnlyVerification(String type) {
-    return type == 'partner' || type == 'location_partner';
-  }
 
   String _verificationLabel(String type) {
     switch (type) {
@@ -1003,10 +1177,11 @@ class _TodayScreenState extends State<TodayScreen> {
           children: [
             _buildSectionTitle(
               'Next task',
-              subtitle: 'Your next scheduled commitment.',
+              subtitle:
+                  'The next thing scheduled after what is currently available.',
             ),
             const Text(
-              'No upcoming tasks remain for today.',
+              'No later task remains for today.',
               style: TextStyle(
                 color: Color(0xFFB3B3BB),
                 fontSize: 14,
@@ -1047,7 +1222,8 @@ class _TodayScreenState extends State<TodayScreen> {
           children: [
             _buildSectionTitle(
               'Next task',
-              subtitle: 'Your next scheduled commitment.',
+              subtitle:
+                  'The next thing scheduled after what is currently available.',
             ),
             Row(
               children: [
@@ -1125,10 +1301,11 @@ class _TodayScreenState extends State<TodayScreen> {
 
   Widget _buildActionButtonForLog(Map<String, dynamic> log) {
     final status = (log['status'] ?? 'pending').toString();
+    final isDone = status == 'done';
     final verificationType = _verificationType(log);
     final state = _taskState(log);
 
-    if (status == 'done') {
+    if (isDone) {
       return _buildPassiveActionChip(
         text: 'Done',
         color: const Color(0xFF2E7D32),
@@ -1451,26 +1628,13 @@ class _TodayScreenState extends State<TodayScreen> {
   }
 
   Widget _buildFocusButton() {
-    final focusLogs = _availableLogs
-        .where((log) => _isFocusVerification(_verificationType(log)))
-        .toList();
-
-    final hasAvailableNow = focusLogs.isNotEmpty;
+    final targetLog = _focusModeEntryLog;
+    final hasTarget = targetLog != null;
 
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton.icon(
-        onPressed: hasAvailableNow
-            ? () {
-                final log = focusLogs.first;
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => FocusModeScreen(log: log),
-                  ),
-                ).then((_) => _loadTodayData());
-              }
-            : null,
+        onPressed: hasTarget ? () async => _openFocusMode(targetLog) : null,
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFFF5F5F5),
           foregroundColor: Colors.black,
@@ -1484,7 +1648,7 @@ class _TodayScreenState extends State<TodayScreen> {
         ),
         icon: const Icon(Icons.center_focus_strong),
         label: Text(
-          hasAvailableNow ? 'Start Focus Mode' : 'No focus task available now',
+          hasTarget ? 'Focus Mode' : 'No focus task available now',
           style: const TextStyle(
             fontWeight: FontWeight.w700,
           ),
@@ -1516,9 +1680,9 @@ class _TodayScreenState extends State<TodayScreen> {
     }
 
     final hasAvailableNow = _availableLogs.isNotEmpty;
-    final hasUpcoming = _upcomingLogs.isNotEmpty;
     final hasReview = _reviewLogs.isNotEmpty;
     final hasMissed = _missedLogs.isNotEmpty;
+    final hasLaterToday = _laterTodayLogs.isNotEmpty;
 
     return HoldToRefreshWrapper(
       onRefresh: _loadTodayData,
@@ -1531,8 +1695,6 @@ class _TodayScreenState extends State<TodayScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _buildTopHero(),
-            const SizedBox(height: 18),
-            _buildNextTaskCard(),
             if (hasAvailableNow) ...[
               const SizedBox(height: 18),
               _buildTaskSection(
@@ -1540,6 +1702,17 @@ class _TodayScreenState extends State<TodayScreen> {
                 subtitle:
                     'These commitments can be executed or submitted right now.',
                 logs: _availableLogs,
+                emptyText: '',
+              ),
+            ],
+            const SizedBox(height: 18),
+            _buildNextTaskCard(),
+            if (hasLaterToday) ...[
+              const SizedBox(height: 18),
+              _buildTaskSection(
+                title: 'Later today',
+                subtitle: 'Other tasks that are coming up after the next one.',
+                logs: _laterTodayLogs,
                 emptyText: '',
               ),
             ],

@@ -1,7 +1,9 @@
 // ignore_for_file: unnecessary_cast
 
 import 'package:achievr_app/Screens/Social/focus_policy_settings_screen.dart';
+import 'package:achievr_app/Screens/Social/set_habit_location_screen.dart';
 import 'package:achievr_app/Services/friends_service.dart';
+import 'package:achievr_app/Services/habit_location_service.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -18,6 +20,7 @@ class _VerificationSettingsScreenState
     with SingleTickerProviderStateMixin {
   final SupabaseClient _supabase = Supabase.instance.client;
   final FriendsService _friendsService = FriendsService();
+  final HabitLocationService _habitLocationService = HabitLocationService();
 
   late TabController _tabController;
 
@@ -155,14 +158,36 @@ class _VerificationSettingsScreenState
       for (final row in verifierRows) row['habit_id'].toString(): row,
     };
 
+    final locationConfigRows = List<Map<String, dynamic>>.from(
+      await _supabase
+          .from('habit_location_configs')
+          .select('''
+            habit_location_config_id,
+            habit_id,
+            label,
+            latitude,
+            longitude,
+            radius_meters,
+            active
+          ''')
+          .inFilter('habit_id', habitIds)
+          .eq('active', true),
+    );
+
+    final locationConfigMap = {
+      for (final row in locationConfigRows) row['habit_id'].toString(): row,
+    };
+
     return habits.map((habit) {
       final goal = goalMap[habit['goal_id'].toString()];
       final verifier = verifierMap[habit['habit_id'].toString()];
+      final locationConfig = locationConfigMap[habit['habit_id'].toString()];
 
       return {
         ...habit,
         'goal_title': goal?['title']?.toString() ?? 'Unknown Goal',
         'verifier_user_id': verifier?['verifier_user_id'],
+        'location_config': locationConfig,
       };
     }).toList();
   }
@@ -375,8 +400,15 @@ class _VerificationSettingsScreenState
         type == 'location_focus_partner';
   }
 
+  bool _habitNeedsLocation(Map<String, dynamic> habit) {
+    final type = (habit['verification_type'] ?? '').toString();
+    return _habitLocationService.habitRequiresLocation(type);
+  }
+
   bool _shouldShowInMySetup(Map<String, dynamic> habit) {
-    return _habitNeedsVerifier(habit) || _habitSupportsFocusPolicy(habit);
+    return _habitNeedsVerifier(habit) ||
+        _habitSupportsFocusPolicy(habit) ||
+        _habitNeedsLocation(habit);
   }
 
   Future<void> _openFocusPolicyForHabit(Map<String, dynamic> habit) async {
@@ -391,6 +423,29 @@ class _VerificationSettingsScreenState
       context,
       MaterialPageRoute(
         builder: (_) => FocusPolicySettingsScreen(
+          habitId: habitId,
+          habitTitle: title,
+          verificationType: verificationType,
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    await _loadHubData();
+  }
+
+  Future<void> _openLocationSetupForHabit(Map<String, dynamic> habit) async {
+    final habitId = habit['habit_id']?.toString();
+    final title = (habit['title'] ?? 'Habit').toString();
+    final verificationType =
+        (habit['verification_type'] ?? 'manual').toString();
+
+    if (habitId == null || habitId.isEmpty) return;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SetHabitLocationScreen(
           habitId: habitId,
           habitTitle: title,
           verificationType: verificationType,
@@ -454,6 +509,17 @@ class _VerificationSettingsScreenState
       default:
         return raw;
     }
+  }
+
+  String _locationSummary(Map<String, dynamic> habit) {
+    final config = habit['location_config'] as Map<String, dynamic>?;
+    if (config == null) {
+      return 'Pinned place: Not set';
+    }
+
+    final label = (config['label'] ?? 'Pinned place').toString();
+    final radius = config['radius_meters']?.toString() ?? 'Unknown';
+    return 'Pinned place: $label • ${radius}m radius';
   }
 
   Color _requestStatusColor(String raw) {
@@ -735,8 +801,7 @@ class _VerificationSettingsScreenState
     required bool filled,
     required VoidCallback? onTap,
   }) {
-    final foreground =
-        filled ? Colors.black : const Color(0xFFF5F5F5);
+    final foreground = filled ? Colors.black : const Color(0xFFF5F5F5);
     final background =
         filled ? const Color(0xFFF5F5F5) : Colors.transparent;
     final borderColor =
@@ -772,6 +837,8 @@ class _VerificationSettingsScreenState
         _habits.where((habit) => _habitNeedsVerifier(habit)).length;
     final focusHabits =
         _habits.where((habit) => _habitSupportsFocusPolicy(habit)).length;
+    final locationHabits =
+        _habits.where((habit) => _habitNeedsLocation(habit)).length;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -788,6 +855,13 @@ class _VerificationSettingsScreenState
             child: _buildMetricChip(
               label: 'Focus',
               value: '$focusHabits',
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildMetricChip(
+              label: 'Location',
+              value: '$locationHabits',
             ),
           ),
           const SizedBox(width: 8),
@@ -832,8 +906,11 @@ class _VerificationSettingsScreenState
 
     final needsVerifier = _habitNeedsVerifier(habit);
     final supportsFocusPolicy = _habitSupportsFocusPolicy(habit);
+    final needsLocation = _habitNeedsLocation(habit);
     final verifierName =
         _friendNameFromUserId(habit['verifier_user_id']?.toString());
+    final hasLocationConfig =
+        (habit['location_config'] as Map<String, dynamic>?) != null;
 
     return Container(
       margin: const EdgeInsets.only(top: 10),
@@ -881,31 +958,53 @@ class _VerificationSettingsScreenState
           if (supportsFocusPolicy) ...[
             const SizedBox(height: 4),
             const Text(
-              'Focus policy: allowed apps and derived grace period can be configured.',
+              'Focus policy: allowed apps and grace period can be configured.',
               style: TextStyle(
                 color: Color(0xFFB3B3BB),
                 fontSize: 12,
               ),
             ),
           ],
-          if (needsVerifier || supportsFocusPolicy) ...[
+          if (needsLocation) ...[
+            const SizedBox(height: 4),
+            Text(
+              _locationSummary(habit),
+              style: TextStyle(
+                color: hasLocationConfig
+                    ? const Color(0xFFB3B3BB)
+                    : const Color(0xFFFFB74D),
+                fontSize: 12,
+              ),
+            ),
+          ],
+          if (needsVerifier || supportsFocusPolicy || needsLocation) ...[
             const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.end,
               children: [
                 if (needsVerifier)
                   _buildCompactActionChip(
-                    text: habit['verifier_user_id'] == null ? 'Assign' : 'Change',
+                    text:
+                        habit['verifier_user_id'] == null ? 'Assign' : 'Change',
                     filled: false,
                     onTap: _isSaving ? null : () => _pickVerifierForHabit(habit),
                   ),
-                if (needsVerifier && supportsFocusPolicy)
-                  const SizedBox(width: 8),
+                if (needsLocation)
+                  _buildCompactActionChip(
+                    text: hasLocationConfig ? 'Change Location' : 'Set Location',
+                    filled: false,
+                    onTap:
+                        _isSaving ? null : () => _openLocationSetupForHabit(habit),
+                  ),
                 if (supportsFocusPolicy)
                   _buildCompactActionChip(
                     text: 'Focus Policy',
                     filled: true,
-                    onTap: _isSaving ? null : () => _openFocusPolicyForHabit(habit),
+                    onTap: _isSaving
+                        ? null
+                        : () => _openFocusPolicyForHabit(habit),
                   ),
               ],
             ),
@@ -1125,7 +1224,7 @@ class _VerificationSettingsScreenState
                 _buildSectionTitle(
                   'My verification setup',
                   subtitle:
-                      'Partner habits can assign a verifier. Focus habits can configure allowed apps and derived grace period.',
+                      'Configure verifier assignment, pinned locations, and focus app policy per habit.',
                 ),
                 if (setupHabits.isEmpty)
                   const Text(
