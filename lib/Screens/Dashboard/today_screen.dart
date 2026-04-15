@@ -1,12 +1,13 @@
-// ignore_for_file: unused_local_variable, unused_element, use_build_context_synchronously
+// ignore_for_file: unused_local_variable, unused_element, use_build_context_synchronously, unused_import
 
 import 'dart:async';
 
-import 'package:achievr_app/Providers/focus_session_provider.dart';
+import 'package:achievr_app/Providers/focus_runtime_controller_provider.dart';
 import 'package:achievr_app/Screens/Dashboard/focus_mode_screen.dart';
 import 'package:achievr_app/Screens/Social/set_habit_location_screen.dart';
 import 'package:achievr_app/Screens/habit_log_service.dart';
 import 'package:achievr_app/Services/app_clock.dart';
+import 'package:achievr_app/Services/focus_engine_models.dart';
 import 'package:achievr_app/Services/habit_location_service.dart';
 import 'package:achievr_app/Services/location_runtime_service.dart';
 import 'package:achievr_app/Services/verification_service.dart';
@@ -429,11 +430,11 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
     final hasLocationConfig = await _ensurePinnedLocationConfiguredForLog(log);
     if (!hasLocationConfig) return;
 
-    final coordinator = ref.read(focusSessionCoordinatorProvider);
+    final controller = ref.read(focusRuntimeControllerProvider);
     final requestedLogId = log['log_id']?.toString();
 
-    if (!coordinator.isSameActiveLog(requestedLogId)) {
-      await coordinator.attachToLog(log);
+    if (!controller.isSameActiveLog(requestedLogId)) {
+      await controller.attachToLog(log);
     }
 
     await Navigator.push(
@@ -919,9 +920,9 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
   }
 
   Map<String, dynamic>? get _sharedActiveFocusLog {
-    final focusState = ref.watch(focusSessionCoordinatorProvider).state;
-    if (!focusState.hasLiveSession) return null;
-    return focusState.log;
+    final runtimeState = ref.watch(focusRuntimeControllerProvider).state;
+    if (!runtimeState.hasLiveSession) return null;
+    return runtimeState.log;
   }
 
   Map<String, dynamic>? get _availableFocusLog {
@@ -1628,6 +1629,7 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
   }
 
   Widget _buildFocusButton() {
+    final runtimeState = ref.watch(focusRuntimeControllerProvider).state;
     final targetLog = _focusModeEntryLog;
     final hasTarget = targetLog != null;
 

@@ -30,6 +30,7 @@ class _FocusPolicySettingsScreenState
   bool _isSaving = false;
   bool _isReplacingApps = false;
   bool _isLoadingInstalledApps = false;
+
   String? _error;
 
   String _policyMode = 'achievr_only';
@@ -113,13 +114,12 @@ class _FocusPolicySettingsScreenState
     final previousMode = _policyMode;
     final previousAllowedApps = List<Map<String, dynamic>>.from(_allowedApps);
 
-    try {
-      setState(() {
-        _policyMode = value;
-        _isSaving = true;
-        _error = null;
-      });
+    setState(() {
+      _policyMode = value;
+      _isSaving = true;
+    });
 
+    try {
       await _appPolicyService.upsertHabitAppPolicy(
         habitId: widget.habitId,
         policyMode: value,
@@ -132,9 +132,12 @@ class _FocusPolicySettingsScreenState
           habitId: widget.habitId,
           apps: const [],
         );
-      }
 
-      await _loadPolicy();
+        if (!mounted) return;
+        setState(() {
+          _allowedApps = [];
+        });
+      }
 
       if (!mounted) return;
 
@@ -153,7 +156,6 @@ class _FocusPolicySettingsScreenState
       setState(() {
         _policyMode = previousMode;
         _allowedApps = previousAllowedApps;
-        _error = e.toString();
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -171,10 +173,12 @@ class _FocusPolicySettingsScreenState
   Future<void> _savePolicy() async {
     if (!_supportsFocusPolicy) return;
 
+    final previousMode = _policyMode;
+    final previousAllowedApps = List<Map<String, dynamic>>.from(_allowedApps);
+
     try {
       setState(() {
         _isSaving = true;
-        _error = null;
       });
 
       await _appPolicyService.upsertHabitAppPolicy(
@@ -189,9 +193,12 @@ class _FocusPolicySettingsScreenState
           habitId: widget.habitId,
           apps: const [],
         );
-      }
 
-      await _loadPolicy();
+        if (!mounted) return;
+        setState(() {
+          _allowedApps = [];
+        });
+      }
 
       if (!mounted) return;
 
@@ -202,7 +209,8 @@ class _FocusPolicySettingsScreenState
       if (!mounted) return;
 
       setState(() {
-        _error = e.toString();
+        _policyMode = previousMode;
+        _allowedApps = previousAllowedApps;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -218,41 +226,6 @@ class _FocusPolicySettingsScreenState
   }
 
   Future<void> _addAllowedApp() async {
-    if (_policyMode != 'allow_list') {
-      try {
-        setState(() {
-          _isSaving = true;
-          _error = null;
-        });
-
-        await _appPolicyService.upsertHabitAppPolicy(
-          habitId: widget.habitId,
-          policyMode: 'allow_list',
-          leaveGraceSeconds: _leaveGraceSeconds,
-          allowScreenOff: _allowScreenOff,
-        );
-
-        await _loadPolicy();
-      } catch (e) {
-        if (!mounted) return;
-
-        setState(() {
-          _error = e.toString();
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to switch to allow-list mode: $e')),
-        );
-        return;
-      } finally {
-        if (mounted) {
-          setState(() {
-            _isSaving = false;
-          });
-        }
-      }
-    }
-
     if (_allowedApps.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -264,10 +237,32 @@ class _FocusPolicySettingsScreenState
       return;
     }
 
+    final previousMode = _policyMode;
+    final previousApps = List<Map<String, dynamic>>.from(_allowedApps);
+
     try {
+      if (_policyMode != 'allow_list') {
+        setState(() {
+          _isSaving = true;
+          _policyMode = 'allow_list';
+        });
+
+        await _appPolicyService.upsertHabitAppPolicy(
+          habitId: widget.habitId,
+          policyMode: 'allow_list',
+          leaveGraceSeconds: _leaveGraceSeconds,
+          allowScreenOff: _allowScreenOff,
+        );
+
+        if (!mounted) return;
+
+        setState(() {
+          _isSaving = false;
+        });
+      }
+
       setState(() {
         _isLoadingInstalledApps = true;
-        _error = null;
       });
 
       final installedApps = await _installedAppsService.getLaunchableApps();
@@ -311,6 +306,12 @@ class _FocusPolicySettingsScreenState
 
       setState(() {
         _isReplacingApps = true;
+        _allowedApps = [
+          {
+            'app_label': label,
+            'app_identifier': identifier,
+          }
+        ];
       });
 
       await _appPolicyService.addAllowedAppToHabit(
@@ -318,8 +319,6 @@ class _FocusPolicySettingsScreenState
         appIdentifier: identifier,
         appLabel: label,
       );
-
-      await _loadPolicy();
 
       if (!mounted) return;
 
@@ -330,17 +329,19 @@ class _FocusPolicySettingsScreenState
       if (!mounted) return;
 
       setState(() {
-        _error = e.toString();
+        _policyMode = previousMode;
+        _allowedApps = previousApps;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load installed apps: $e')),
+        SnackBar(content: Text('Failed to add allowed app: $e')),
       );
     } finally {
       if (mounted) {
         setState(() {
           _isLoadingInstalledApps = false;
           _isReplacingApps = false;
+          _isSaving = false;
         });
       }
     }
@@ -489,18 +490,20 @@ class _FocusPolicySettingsScreenState
   }
 
   Future<void> _removeAllowedApp(String appIdentifier) async {
+    final previousApps = List<Map<String, dynamic>>.from(_allowedApps);
+
     try {
       setState(() {
         _isReplacingApps = true;
-        _error = null;
+        _allowedApps = _allowedApps
+            .where((app) => (app['app_identifier'] ?? '') != appIdentifier)
+            .toList();
       });
 
       await _appPolicyService.removeAllowedAppFromHabit(
         habitId: widget.habitId,
         appIdentifier: appIdentifier,
       );
-
-      await _loadPolicy();
 
       if (!mounted) return;
 
@@ -511,7 +514,7 @@ class _FocusPolicySettingsScreenState
       if (!mounted) return;
 
       setState(() {
-        _error = e.toString();
+        _allowedApps = previousApps;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(

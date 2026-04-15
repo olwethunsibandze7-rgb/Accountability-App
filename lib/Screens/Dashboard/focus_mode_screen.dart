@@ -1,10 +1,9 @@
 // ignore_for_file: deprecated_member_use, use_build_context_synchronously
 
-import 'package:achievr_app/Providers/focus_session_provider.dart';
+import 'package:achievr_app/Providers/focus_runtime_controller_provider.dart';
 import 'package:achievr_app/Screens/Social/verification_settings_screen.dart';
 import 'package:achievr_app/Services/app_clock.dart';
-import 'package:achievr_app/Services/device_runtime_service.dart';
-import 'package:achievr_app/Services/focus_runtime_service.dart';
+import 'package:achievr_app/Services/focus_engine_models.dart';
 import 'package:achievr_app/Services/habit_location_service.dart';
 import 'package:achievr_app/Services/location_runtime_service.dart';
 import 'package:flutter/material.dart';
@@ -24,16 +23,13 @@ class FocusModeScreen extends ConsumerStatefulWidget {
 }
 
 class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
-  final FocusRuntimeService _focusRuntimeService = FocusRuntimeService();
   final HabitLocationService _habitLocationService = HabitLocationService();
-  final DeviceRuntimeService _deviceRuntimeService = DeviceRuntimeService();
   final LocationRuntimeService _locationRuntimeService =
       LocationRuntimeService();
 
   bool _isStarting = false;
   bool _isCompleting = false;
   bool _isAbandoning = false;
-  bool _isPreparingRuntime = false;
   bool _isPreparingLocation = false;
 
   @override
@@ -41,14 +37,14 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     super.initState();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final coordinator = ref.read(focusSessionCoordinatorProvider);
+      final controller = ref.read(focusRuntimeControllerProvider);
       final requestedLogId = widget.log['log_id']?.toString();
 
-      if (coordinator.isSameActiveLog(requestedLogId)) {
+      if (controller.isSameActiveLog(requestedLogId)) {
         return;
       }
 
-      await coordinator.attachToLog(widget.log);
+      await controller.attachToLog(widget.log);
     });
   }
 
@@ -165,39 +161,15 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     return 'This task is outside its execution window.';
   }
 
-  Future<void> _refreshCoordinator() async {
-    final coordinator = ref.read(focusSessionCoordinatorProvider);
+  Future<void> _refreshController() async {
+    final controller = ref.read(focusRuntimeControllerProvider);
     final requestedLogId = widget.log['log_id']?.toString();
 
-    if (coordinator.isSameActiveLog(requestedLogId)) {
+    if (controller.isSameActiveLog(requestedLogId)) {
       return;
     }
 
-    await coordinator.attachToLog(widget.log);
-  }
-
-  Future<void> _requestUsageAccess() async {
-    try {
-      setState(() {
-        _isPreparingRuntime = true;
-      });
-
-      await _deviceRuntimeService.openUsageAccessSettings();
-      await Future.delayed(const Duration(seconds: 1));
-      await _refreshCoordinator();
-    } catch (e) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open usage access settings: $e')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isPreparingRuntime = false;
-        });
-      }
-    }
+    await controller.attachToLog(widget.log);
   }
 
   Future<void> _requestLocationAccess() async {
@@ -224,7 +196,7 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
         throw Exception('Location permission denied forever. Open app settings.');
       }
 
-      await _refreshCoordinator();
+      await _refreshController();
     } catch (e) {
       if (!mounted) return;
 
@@ -249,7 +221,7 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     );
 
     if (!mounted) return;
-    await _refreshCoordinator();
+    await _refreshController();
   }
 
   Future<bool> _ensureLocationConfigExists(bool needsLocation) async {
@@ -276,44 +248,23 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     return false;
   }
 
-  Future<Position?> _maybeGetCurrentPosition(bool needsLocation) async {
-    if (!needsLocation) return null;
-
-    final enabled = await _locationRuntimeService.isServiceEnabled();
-    if (!enabled) {
-      throw Exception('Location services are disabled.');
-    }
-
-    var permission = await _locationRuntimeService.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await _locationRuntimeService.requestPermission();
-    }
-
-    if (permission == LocationPermission.denied) {
-      throw Exception('Location permission denied.');
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      throw Exception('Location permission denied forever. Open app settings.');
-    }
-
-    return _locationRuntimeService.getCurrentPosition();
-  }
-
   Future<void> _startFocus() async {
-    final habitId = _habitId;
     final logId = _logId;
-    final coordinator = ref.read(focusSessionCoordinatorProvider);
-    final focusState = coordinator.state;
+    final habitId = _habitId;
+    final controller = ref.read(focusRuntimeControllerProvider);
+    final runtimeState = controller.state;
+    final habit = runtimeState.habit;
+    final verificationType = (habit?['verification_type'] ?? '').toString();
+    final needsLocation = verificationType.contains('location');
 
-    if (habitId == null || logId == null) return;
+    if (logId == null || habitId == null) return;
 
     try {
       setState(() {
         _isStarting = true;
       });
 
-      if (focusState.session != null && focusState.hasLiveSession) {
+      if (runtimeState.hasLiveSession) {
         throw Exception('This task already has an active focus session.');
       }
 
@@ -321,37 +272,17 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
         throw Exception(_executionWindowMessage);
       }
 
-      final verificationType =
-          (focusState.habit?['verification_type'] ?? '').toString();
-      final supportsFocus = verificationType == 'focus_auto' ||
-          verificationType == 'focus_partner' ||
-          verificationType == 'location_focus' ||
-          verificationType == 'location_focus_partner';
-      final needsLocation = verificationType.contains('location');
-
       final hasPinnedLocation =
           await _ensureLocationConfigExists(needsLocation);
       if (!hasPinnedLocation) {
         throw Exception('This habit needs location setup first.');
       }
 
-      if (supportsFocus && !focusState.usageAccessReady) {
+      if (!runtimeState.usageAccessReady) {
         throw Exception('Usage access is required for focus mode.');
       }
 
-      final position = await _maybeGetCurrentPosition(needsLocation);
-
-      await _focusRuntimeService.startFocusSession(
-        logId: logId,
-        habitId: habitId,
-        currentLatitude: position?.latitude,
-        currentLongitude: position?.longitude,
-        initialForegroundAppIdentifier: 'com.example.achievr_app',
-        isScreenOff: false,
-      );
-
-      await coordinator.attachToLog(widget.log);
-      await coordinator.ensureMonitoringStarted();
+      await controller.startSessionForAttachedLog();
 
       if (!mounted) return;
 
@@ -374,33 +305,27 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
   }
 
   Future<void> _completeFocus() async {
-    final coordinator = ref.read(focusSessionCoordinatorProvider);
-    final sessionId = coordinator.state.focusSessionId;
-    if (sessionId == null) return;
+    final controller = ref.read(focusRuntimeControllerProvider);
 
     try {
       setState(() {
         _isCompleting = true;
       });
 
-      final completed = await _focusRuntimeService.completeFocusSession(
-        focusSessionId: sessionId,
-      );
-
-      await _deviceRuntimeService.stopMonitoring();
-      await coordinator.attachToLog(widget.log);
+      await controller.completeSession();
 
       if (!mounted) return;
 
-      final thresholdMet = (completed['threshold_met'] as bool?) ?? false;
-      final status = (completed['status'] ?? '').toString();
+      final engineState = controller.state.engineState;
+      final thresholdMet = engineState?.thresholdMet ?? false;
+      final phase = controller.state.phaseLabel;
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             thresholdMet
                 ? 'Focus session completed.'
-                : 'Focus session ended, but threshold was not met ($status).',
+                : 'Focus session ended, but threshold was not met ($phase).',
           ),
         ),
       );
@@ -420,21 +345,14 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
   }
 
   Future<void> _abandonFocus() async {
-    final coordinator = ref.read(focusSessionCoordinatorProvider);
-    final sessionId = coordinator.state.focusSessionId;
-    if (sessionId == null) return;
+    final controller = ref.read(focusRuntimeControllerProvider);
 
     try {
       setState(() {
         _isAbandoning = true;
       });
 
-      await _focusRuntimeService.abandonFocusSession(
-        focusSessionId: sessionId,
-      );
-
-      await _deviceRuntimeService.stopMonitoring();
-      await coordinator.attachToLog(widget.log);
+      await controller.abandonSession();
 
       if (!mounted) return;
 
@@ -478,42 +396,44 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     return '$mm:$ss';
   }
 
-  String _statusLabel(String raw) {
-    switch (raw) {
-      case 'running':
+  String _statusLabel(FocusSessionPhase? phase) {
+    switch (phase) {
+      case FocusSessionPhase.running:
         return 'Running';
-      case 'grace':
+      case FocusSessionPhase.violationDebounce:
+        return 'Warning';
+      case FocusSessionPhase.grace:
         return 'Grace';
-      case 'paused':
-        return 'Paused';
-      case 'completed':
+      case FocusSessionPhase.completed:
         return 'Completed';
-      case 'failed':
+      case FocusSessionPhase.failed:
         return 'Failed';
-      case 'abandoned':
+      case FocusSessionPhase.abandoned:
         return 'Abandoned';
-      case 'invalidated':
-        return 'Invalidated';
-      default:
-        return raw.isEmpty ? 'Not started' : raw;
+      case FocusSessionPhase.arming:
+        return 'Arming';
+      case FocusSessionPhase.idle:
+      case null:
+        return 'Not started';
     }
   }
 
-  Color _statusColor(String raw) {
-    switch (raw) {
-      case 'running':
+  Color _statusColor(FocusSessionPhase? phase) {
+    switch (phase) {
+      case FocusSessionPhase.running:
         return const Color(0xFF4CAF50);
-      case 'grace':
+      case FocusSessionPhase.violationDebounce:
+      case FocusSessionPhase.grace:
         return const Color(0xFFFFB300);
-      case 'paused':
-        return const Color(0xFF90A4AE);
-      case 'completed':
+      case FocusSessionPhase.completed:
         return const Color(0xFF2E7D32);
-      case 'failed':
-      case 'abandoned':
-      case 'invalidated':
+      case FocusSessionPhase.failed:
+      case FocusSessionPhase.abandoned:
         return const Color(0xFFE57373);
-      default:
+      case FocusSessionPhase.arming:
+        return const Color(0xFF90A4AE);
+      case FocusSessionPhase.idle:
+      case null:
         return const Color(0xFFB3B3BB);
     }
   }
@@ -598,9 +518,11 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final focusState = ref.watch(focusSessionCoordinatorProvider).state;
+    final runtimeState = ref.watch(focusRuntimeControllerProvider).state;
+    final engineState = runtimeState.engineState;
+    final phase = engineState?.phase;
 
-    if (focusState.isLoading && focusState.session == null) {
+    if (runtimeState.isLoading && runtimeState.session == null) {
       return const Scaffold(
         backgroundColor: Color(0xFF0B0B0C),
         body: Center(
@@ -609,7 +531,7 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
       );
     }
 
-    if (focusState.error != null && focusState.session == null) {
+    if (runtimeState.error != null && runtimeState.session == null) {
       return Scaffold(
         backgroundColor: const Color(0xFF0B0B0C),
         appBar: AppBar(
@@ -620,7 +542,7 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Text(
-              focusState.error!,
+              runtimeState.error!,
               textAlign: TextAlign.center,
               style: const TextStyle(color: Color(0xFFB3B3BB)),
             ),
@@ -629,51 +551,51 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
       );
     }
 
-    final status = focusState.status;
-    final hasLiveSession = focusState.hasLiveSession;
-    final isTerminal = status == 'completed' ||
-        status == 'failed' ||
-        status == 'abandoned' ||
-        status == 'invalidated';
-    final canStart = focusState.session == null && _isWithinExecutionWindow;
+    final hasLiveSession = runtimeState.hasLiveSession;
+    final isTerminal = phase == FocusSessionPhase.completed ||
+        phase == FocusSessionPhase.failed ||
+        phase == FocusSessionPhase.abandoned;
+    final canStart = !hasLiveSession &&
+        !isTerminal &&
+        runtimeState.session == null &&
+        _isWithinExecutionWindow;
 
     final verificationType =
-        (focusState.habit?['verification_type'] ?? '').toString();
+        (runtimeState.habit?['verification_type'] ?? '').toString();
     final needsLocation = verificationType.contains('location');
 
-    final plannedDurationSeconds = (() {
-      final value = focusState.session?['planned_duration_seconds'];
-      if (value is int) return value;
-      if (value is double) return value.round();
-      return int.tryParse(value?.toString() ?? '') ?? 0;
-    })();
+    final validFocusSeconds = engineState?.validFocusSeconds ?? 0;
+    final graceUsed = engineState?.graceSecondsUsed ?? 0;
 
-    final minValidMinutes = (() {
-      final value = focusState.habit?['min_valid_minutes'];
-      if (value is int) return value;
-      if (value is double) return value.round();
-      return int.tryParse(value?.toString() ?? '') ?? 0;
-    })();
+    final requiredValidSeconds = (() {
+      final minValidMinutes = runtimeState.habit?['min_valid_minutes'];
+      final durationMinutes = runtimeState.habit?['duration_minutes'];
 
-    final durationMinutes = (() {
-      final value = focusState.habit?['duration_minutes'];
-      if (value is int) return value;
-      if (value is double) return value.round();
-      return int.tryParse(value?.toString() ?? '') ?? 0;
-    })();
+      final minValid = minValidMinutes is int
+          ? minValidMinutes
+          : int.tryParse('${minValidMinutes ?? ''}') ?? 0;
+      if (minValid > 0) return minValid * 60;
 
-    final requiredValidSeconds = minValidMinutes > 0
-        ? minValidMinutes * 60
-        : (plannedDurationSeconds > 0
-            ? plannedDurationSeconds
-            : (durationMinutes > 0 ? durationMinutes * 60 : 0));
+      final duration = durationMinutes is int
+          ? durationMinutes
+          : int.tryParse('${durationMinutes ?? ''}') ?? 0;
+      if (duration > 0) return duration * 60;
+
+      return 0;
+    })();
 
     final remainingRequiredSeconds =
-        (requiredValidSeconds - focusState.validFocusSeconds).clamp(0, 1 << 30);
+        (requiredValidSeconds - validFocusSeconds).clamp(0, 1 << 30);
 
-    final graceRemaining = (focusState.graceSecondsAllowed -
-            focusState.graceSecondsUsed)
-        .clamp(0, 1 << 30);
+    final graceAllowed = (() {
+      final raw = runtimeState.policySnapshot?['leave_grace_seconds'];
+      if (raw is int && raw > 0) return raw;
+      if (raw is double && raw > 0) return raw.round();
+      final parsed = int.tryParse('${raw ?? ''}');
+      return (parsed != null && parsed > 0) ? parsed : 30;
+    })();
+
+    final graceRemaining = (graceAllowed - graceUsed).clamp(0, 1 << 30);
 
     final secondsUntilWindowCloses = (() {
       final end = _windowEnd;
@@ -722,42 +644,42 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   decoration: BoxDecoration(
-                    color: _statusColor(status).withValues(alpha: 0.14),
+                    color: _statusColor(phase).withValues(alpha: 0.14),
                     borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: _statusColor(status)),
+                    border: Border.all(color: _statusColor(phase)),
                   ),
                   child: Text(
-                    _statusLabel(status),
+                    _statusLabel(phase),
                     style: TextStyle(
-                      color: _statusColor(status),
+                      color: _statusColor(phase),
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
-                if (focusState.error != null) ...[
+                if (runtimeState.error != null) ...[
                   const SizedBox(height: 12),
                   Text(
-                    focusState.error!,
+                    runtimeState.error!,
                     style: const TextStyle(
                       color: Color(0xFFFF8A80),
                       height: 1.35,
                     ),
                   ),
                 ],
-                if (focusState.syncWarning != null) ...[
+                if (runtimeState.syncWarning != null) ...[
                   const SizedBox(height: 8),
                   Text(
-                    focusState.syncWarning!,
+                    runtimeState.syncWarning!,
                     style: const TextStyle(
                       color: Color(0xFFFFB74D),
                       height: 1.35,
                     ),
                   ),
                 ],
-                if (focusState.localGraceReason != null) ...[
+                if (engineState?.activeViolationMessage != null) ...[
                   const SizedBox(height: 8),
                   Text(
-                    focusState.localGraceReason!,
+                    engineState!.activeViolationMessage!,
                     style: const TextStyle(
                       color: Color(0xFFFFB300),
                       height: 1.35,
@@ -791,7 +713,7 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
             children: [
               _buildMetricCard(
                 label: 'Valid focus',
-                value: _formatSeconds(focusState.validFocusSeconds),
+                value: _formatSeconds(validFocusSeconds),
               ),
               const SizedBox(width: 10),
               _buildMetricCard(
@@ -821,12 +743,12 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
             children: [
               _buildMetricCard(
                 label: 'App violations',
-                value: '${focusState.appViolationCount}',
+                value: '${engineState?.appViolationCount ?? 0}',
               ),
               const SizedBox(width: 10),
               _buildMetricCard(
                 label: 'Location violations',
-                value: '${focusState.locationViolationCount}',
+                value: '${engineState?.locationViolationCount ?? 0}',
               ),
             ],
           ),
@@ -835,10 +757,9 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
             title: 'Focus rules',
             text: needsLocation
                 ? 'Achievr is always allowed. Counting continues while you stay in Achievr or an allowed app. Location setup and permissions are managed from Verification.'
-                : 'Achievr is always allowed. Counting continues while you stay in Achievr or an allowed app. Grace starts only when you leave the allowed context.',
+                : 'Achievr is always allowed. Counting continues while you stay in Achievr or an allowed app. A short warning phase happens before grace begins.',
             action: (needsLocation &&
-                    (!focusState.locationPermissionReady ||
-                        focusState.locationConfig == null))
+                    !runtimeState.locationPermissionReady)
                 ? SizedBox(
                     width: double.infinity,
                     child: OutlinedButton(
@@ -853,22 +774,7 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
                 : null,
           ),
           const SizedBox(height: 18),
-          if (!focusState.usageAccessReady)
-            SizedBox(
-              height: 48,
-              child: OutlinedButton(
-                onPressed: _isPreparingRuntime ? null : _requestUsageAccess,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFFF5F5F5),
-                  side: const BorderSide(color: Color(0xFF3A3A42)),
-                ),
-                child: Text(
-                  _isPreparingRuntime ? 'Checking...' : 'Enable Usage Access',
-                ),
-              ),
-            ),
-          if (needsLocation && !focusState.locationPermissionReady) ...[
-            if (!focusState.usageAccessReady) const SizedBox(height: 10),
+          if (needsLocation && !runtimeState.locationPermissionReady)
             SizedBox(
               height: 48,
               child: OutlinedButton(
@@ -882,8 +788,8 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
                 ),
               ),
             ),
-          ],
-          const SizedBox(height: 18),
+          if (needsLocation && !runtimeState.locationPermissionReady)
+            const SizedBox(height: 18),
           if (canStart)
             SizedBox(
               height: 52,
@@ -906,7 +812,7 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
                 ),
               ),
             ),
-          if (!canStart && !hasLiveSession)
+          if (!canStart && !hasLiveSession && !isTerminal)
             SizedBox(
               height: 52,
               child: ElevatedButton.icon(

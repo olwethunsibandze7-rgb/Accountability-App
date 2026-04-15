@@ -1,3 +1,5 @@
+// ignore_for_file: unused_element
+
 import 'package:achievr_app/Services/app_clock.dart';
 import 'package:achievr_app/Widgets/hold_to_refresh_wrapper.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +19,7 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
   String? _error;
 
   List<Map<String, dynamic>> _weeklySchedules = [];
+  Set<String> _closedOccurrenceKeys = <String>{};
 
   static const Map<int, String> _dayNames = {
     1: 'Monday',
@@ -26,6 +29,15 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
     5: 'Friday',
     6: 'Saturday',
     7: 'Sunday',
+  };
+
+  static const Set<String> _closedLogStatuses = {
+    'done',
+    'submitted',
+    'pending_verification',
+    'failed',
+    'missed',
+    'rejected',
   };
 
   DateTime get _screenNow => AppClock.now();
@@ -39,7 +51,7 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
 
   void _handleClockChange() {
     if (!mounted) return;
-    setState(() {});
+    _loadUpcomingData();
   }
 
   @override
@@ -80,6 +92,7 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
         if (!mounted) return;
         setState(() {
           _weeklySchedules = [];
+          _closedOccurrenceKeys = <String>{};
           _isLoading = false;
         });
         return;
@@ -102,6 +115,7 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
         if (!mounted) return;
         setState(() {
           _weeklySchedules = [];
+          _closedOccurrenceKeys = <String>{};
           _isLoading = false;
         });
         return;
@@ -122,6 +136,21 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
       final List<Map<String, dynamic>> fetchedSchedules =
           List<Map<String, dynamic>>.from(schedulesResponse);
 
+      final now = _screenNow;
+      final tomorrow = now.add(const Duration(days: 1));
+
+      final logsResponse = await supabase
+          .from('habit_logs')
+          .select(
+            'log_id, habit_id, schedule_id, log_date, scheduled_start, scheduled_end, status',
+          )
+          .eq('user_id', user.id)
+          .gte('log_date', _formatDateKey(now))
+          .lte('log_date', _formatDateKey(tomorrow));
+
+      final List<Map<String, dynamic>> fetchedLogs =
+          List<Map<String, dynamic>>.from(logsResponse);
+
       final goalById = {
         for (final goal in fetchedGoals) goal['goal_id'].toString(): goal,
       };
@@ -137,6 +166,7 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
 
         return {
           'schedule_id': schedule['schedule_id'],
+          'habit_id': schedule['habit_id'],
           'day_of_week': schedule['day_of_week'],
           'start_time': schedule['start_time'],
           'end_time': schedule['end_time'],
@@ -147,10 +177,32 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
         };
       }).toList();
 
+      final closedKeys = <String>{};
+      for (final log in fetchedLogs) {
+        final status = (log['status'] ?? '').toString().trim().toLowerCase();
+        if (!_closedLogStatuses.contains(status)) continue;
+
+        final scheduleId = log['schedule_id']?.toString();
+        final habitId = log['habit_id']?.toString();
+        final logDate = log['log_date']?.toString();
+        final start = log['scheduled_start']?.toString();
+
+        if (logDate == null || start == null) continue;
+
+        if (scheduleId != null && scheduleId.isNotEmpty) {
+          closedKeys.add('schedule:$scheduleId|date:$logDate|start:$start');
+        }
+
+        if (habitId != null && habitId.isNotEmpty) {
+          closedKeys.add('habit:$habitId|date:$logDate|start:$start');
+        }
+      }
+
       if (!mounted) return;
 
       setState(() {
         _weeklySchedules = List<Map<String, dynamic>>.from(transformedSchedules);
+        _closedOccurrenceKeys = closedKeys;
         _isLoading = false;
       });
     } catch (e, st) {
@@ -164,6 +216,13 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  String _formatDateKey(DateTime dt) {
+    final year = dt.year.toString().padLeft(4, '0');
+    final month = dt.month.toString().padLeft(2, '0');
+    final day = dt.day.toString().padLeft(2, '0');
+    return '$year-$month-$day';
   }
 
   int _timeToMinutes(String? hhmmss) {
@@ -314,38 +373,93 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
     return items.fold<int>(0, (sum, item) => sum + _durationMinutes(item));
   }
 
-  List<Map<String, dynamic>> get _next24HoursItems {
-    final orderedDays = _orderedDays;
-    final grouped = _groupedSchedules;
+  DateTime _nextOccurrenceDate(int targetWeekday) {
+    final now = _screenNow;
+    final startOfToday = DateTime(now.year, now.month, now.day);
+    final distance = (targetWeekday - now.weekday) % 7;
+    return startOfToday.add(Duration(days: distance));
+  }
 
-    final List<Map<String, dynamic>> flattened = [];
+  DateTime? _occurrenceStartDateTime(Map<String, dynamic> item) {
+    final day = item['day_of_week'] as int?;
+    final rawStart = item['start_time']?.toString();
 
-    for (final day in orderedDays) {
-      final items = grouped[day] ?? [];
-      for (final item in items) {
-        flattened.add({
-          ...item,
-          '_relative_day_order': orderedDays.indexOf(day),
-        });
-      }
+    if (day == null || rawStart == null || rawStart.isEmpty) return null;
+
+    final date = _nextOccurrenceDate(day);
+    final parts = rawStart.split(':');
+    if (parts.length < 2) return null;
+
+    final hour = int.tryParse(parts[0]) ?? 0;
+    final minute = int.tryParse(parts[1]) ?? 0;
+    final second = parts.length > 2 ? int.tryParse(parts[2]) ?? 0 : 0;
+
+    return DateTime(
+      date.year,
+      date.month,
+      date.day,
+      hour,
+      minute,
+      second,
+    );
+  }
+
+  String _occurrenceKeyFor(Map<String, dynamic> item, DateTime occurrenceDate) {
+    final scheduleId = item['schedule_id']?.toString();
+    final habitId = item['habit_id']?.toString();
+    final start = item['start_time']?.toString() ?? '';
+    final dateKey = _formatDateKey(occurrenceDate);
+
+    if (scheduleId != null && scheduleId.isNotEmpty) {
+      return 'schedule:$scheduleId|date:$dateKey|start:$start';
     }
 
-    flattened.sort((a, b) {
-      final aDayOrder = a['_relative_day_order'] as int;
-      final bDayOrder = b['_relative_day_order'] as int;
+    return 'habit:$habitId|date:$dateKey|start:$start';
+  }
 
-      if (aDayOrder != bDayOrder) {
-        return aDayOrder.compareTo(bDayOrder);
-      }
+  bool _isOccurrenceClosed(Map<String, dynamic> item, DateTime occurrenceDate) {
+    final scheduleKey = _occurrenceKeyFor(item, occurrenceDate);
+    if (_closedOccurrenceKeys.contains(scheduleKey)) {
+      return true;
+    }
 
-      final aStart = _timeToMinutes(a['start_time']?.toString());
-      final bStart = _timeToMinutes(b['start_time']?.toString());
+    final habitId = item['habit_id']?.toString();
+    final start = item['start_time']?.toString() ?? '';
+    final dateKey = _formatDateKey(occurrenceDate);
+    final fallbackKey = 'habit:$habitId|date:$dateKey|start:$start';
 
+    return _closedOccurrenceKeys.contains(fallbackKey);
+  }
+
+  List<Map<String, dynamic>> get _next24HoursItems {
+    final now = _screenNow;
+    final horizon = now.add(const Duration(hours: 24));
+
+    final List<Map<String, dynamic>> upcoming = [];
+
+    for (final item in _weeklySchedules) {
+      final startAt = _occurrenceStartDateTime(item);
+      if (startAt == null) continue;
+      if (startAt.isBefore(now)) continue;
+      if (startAt.isAfter(horizon)) continue;
+      if (_isOccurrenceClosed(item, startAt)) continue;
+
+      upcoming.add({
+        ...item,
+        '_occurrence_start': startAt,
+      });
+    }
+
+    upcoming.sort((a, b) {
+      final aStart = a['_occurrence_start'] as DateTime;
+      final bStart = b['_occurrence_start'] as DateTime;
       return aStart.compareTo(bStart);
     });
 
-    return flattened.take(3).toList();
+    return upcoming.take(3).toList();
   }
+
+  int get _openNext24HoursCount => _next24HoursItems.length;
 
   Widget _buildSectionTitle(String title, {String? subtitle}) {
     return Padding(
@@ -402,7 +516,7 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
           ),
           const SizedBox(height: 10),
           const Text(
-            'Review your recurring weekly commitments and see what is coming next.',
+            'See the next open commitments in your system and your weekly rhythm at a glance.',
             style: TextStyle(
               color: Color(0xFFB3B3BB),
               height: 1.45,
@@ -423,6 +537,13 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
                 child: _buildMetricChip(
                   label: 'Active Days',
                   value: '$activeDays',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildMetricChip(
+                  label: 'Open Next 24h',
+                  value: '$_openNext24HoursCount',
                 ),
               ),
             ],
@@ -456,6 +577,7 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
           const SizedBox(height: 4),
           Text(
             label,
+            textAlign: TextAlign.center,
             style: const TextStyle(
               color: Color(0xFF9A9AA3),
               fontSize: 12,
@@ -500,18 +622,18 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
         children: [
           _buildSectionTitle(
             'Next 24 hours',
-            subtitle: 'The next commitments approaching in your weekly system.',
+            subtitle: 'Only open upcoming instances. Finished items are hidden.',
           ),
           if (items.isEmpty)
             const Text(
-              'No upcoming commitments found.',
+              'Nothing open is coming up in the next 24 hours.',
               style: TextStyle(
                 color: Color(0xFF9A9AA3),
                 fontSize: 13,
               ),
             ),
           ...items.map((item) {
-            final day = item['day_of_week'] as int? ?? 1;
+            final startAt = item['_occurrence_start'] as DateTime;
             return Container(
               margin: const EdgeInsets.only(top: 10),
               padding: const EdgeInsets.all(14),
@@ -555,7 +677,7 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          '${_dayNames[day] ?? 'Unknown Day'} • ${_formatTimeString(item['start_time'].toString())} – ${_formatTimeString(item['end_time'].toString())}',
+                          '${_dayNames[startAt.weekday] ?? 'Unknown Day'} • ${_formatTimeString(item['start_time'].toString())} – ${_formatTimeString(item['end_time'].toString())}',
                           style: const TextStyle(
                             color: Color(0xFFB3B3BB),
                             fontSize: 12,
@@ -636,7 +758,7 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
               children: [
                 Expanded(
                   child: Text(
-                    '${items.length} task${items.length == 1 ? '' : 's'} • ${_formatDurationLabel(totalMinutes)} scheduled',
+                    '${items.length} task${items.length == 1 ? '' : 's'} • ${_formatDurationLabel(totalMinutes)}',
                     style: const TextStyle(
                       color: Color(0xFFB3B3BB),
                       fontSize: 12,
@@ -694,14 +816,6 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
                             style: const TextStyle(
                               color: Color(0xFFB3B3BB),
                               fontSize: 12,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Verification: ${_verificationLabel(item['verification_type'].toString())}',
-                            style: const TextStyle(
-                              color: Color(0xFF7C7C84),
-                              fontSize: 11,
                             ),
                           ),
                         ],
