@@ -1,9 +1,12 @@
-// ignore_for_file: unnecessary_cast
+// ignore_for_file: unnecessary_cast, use_build_context_synchronously
 
 import 'package:achievr_app/Screens/Social/focus_policy_settings_screen.dart';
 import 'package:achievr_app/Screens/Social/set_habit_location_screen.dart';
 import 'package:achievr_app/Services/friends_service.dart';
 import 'package:achievr_app/Services/habit_location_service.dart';
+import 'package:achievr_app/Services/points_service.dart';
+import 'package:achievr_app/Services/verification_service.dart';
+import 'package:achievr_app/Widgets/points_feedback.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -21,6 +24,8 @@ class _VerificationSettingsScreenState
   final SupabaseClient _supabase = Supabase.instance.client;
   final FriendsService _friendsService = FriendsService();
   final HabitLocationService _habitLocationService = HabitLocationService();
+  final VerificationService _verificationService = VerificationService();
+  final PointsService _pointsService = PointsService();
 
   late TabController _tabController;
 
@@ -689,6 +694,8 @@ class _VerificationSettingsScreenState
   }) async {
     final requestId = request['request_id']?.toString();
     final logId = request['log_id']?.toString();
+    final habitId = request['habit_id']?.toString();
+    final requesterUserId = request['requester_user_id']?.toString();
 
     if (requestId == null || logId == null) return;
 
@@ -697,19 +704,69 @@ class _VerificationSettingsScreenState
         _isSaving = true;
       });
 
-      await _supabase.from('log_verification_requests').update({
-        'status': approve ? 'approved' : 'rejected',
-        'reviewed_at': DateTime.now().toIso8601String(),
-      }).eq('request_id', requestId);
-
-      await _supabase.from('habit_logs').update({
-        'status': approve ? 'done' : 'rejected',
-        'closed_at': DateTime.now().toIso8601String(),
-      }).eq('log_id', logId);
+      if (approve) {
+        await _verificationService.approveVerificationRequest(
+          requestId: requestId,
+          logId: logId,
+        );
+      } else {
+        await _verificationService.rejectVerificationRequest(
+          requestId: requestId,
+          logId: logId,
+        );
+      }
 
       await _loadHubData();
 
       if (!mounted) return;
+
+      if (requesterUserId != null &&
+          requesterUserId.isNotEmpty &&
+          habitId != null &&
+          habitId.isNotEmpty) {
+        final habitRows = await _supabase
+            .from('habits')
+            .select('base_points, penalty_points, verification_type')
+            .eq('habit_id', habitId)
+            .limit(1);
+
+        final habit = habitRows.isNotEmpty
+            ? Map<String, dynamic>.from(habitRows.first as Map)
+            : <String, dynamic>{};
+
+        if (approve) {
+          final basePoints = (() {
+            final raw = habit['base_points'];
+            if (raw is int) return raw;
+            if (raw is double) return raw.round();
+            return int.tryParse('${raw ?? ''}') ?? 0;
+          })();
+
+          final verificationType =
+              (habit['verification_type'] ?? 'partner').toString();
+
+          final awarded = _pointsService.calculateCompletionAward(
+            basePoints: basePoints,
+            verificationType: verificationType,
+          );
+
+          PointsDeltaOverlay.show(context, delta: awarded);
+        } else {
+          final penaltyPoints = (() {
+            final raw = habit['penalty_points'];
+            if (raw is int) return raw;
+            if (raw is double) return raw.round();
+            return int.tryParse('${raw ?? ''}') ?? 0;
+          })();
+
+          final penaltyDelta = _pointsService.calculatePenalty(
+            penaltyPoints: penaltyPoints,
+            penaltyReason: 'rejected',
+          );
+
+          PointsDeltaOverlay.show(context, delta: penaltyDelta);
+        }
+      }
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

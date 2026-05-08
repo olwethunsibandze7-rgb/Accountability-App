@@ -1,9 +1,15 @@
 // ignore_for_file: unused_element
 
+import 'dart:math' as math;
+
+import 'package:achievr_app/Services/badge_service.dart';
+import 'package:achievr_app/Services/points_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class VerificationService {
   final SupabaseClient _supabase = Supabase.instance.client;
+  final PointsService _pointsService = PointsService();
+  final BadgeService _badgeService = BadgeService();
 
   String get _userId {
     final user = _supabase.auth.currentUser;
@@ -345,7 +351,7 @@ class VerificationService {
   // =========================================================
 
   double _degreesToRadians(double degrees) {
-    return degrees * (3.141592653589793 / 180.0);
+    return degrees * (math.pi / 180.0);
   }
 
   double _distanceMeters({
@@ -354,44 +360,18 @@ class VerificationService {
     required double endLat,
     required double endLng,
   }) {
-    const double earthRadiusMeters = 6371000;
+    const earthRadiusMeters = 6371000.0;
 
     final dLat = _degreesToRadians(endLat - startLat);
     final dLng = _degreesToRadians(endLng - startLng);
 
-    final a =
-        (sinSquared(dLat / 2)) +
-        (cosApprox(_degreesToRadians(startLat)) *
-            cosApprox(_degreesToRadians(endLat)) *
-            sinSquared(dLng / 2));
+    final a = math.pow(math.sin(dLat / 2), 2).toDouble() +
+        math.cos(_degreesToRadians(startLat)) *
+            math.cos(_degreesToRadians(endLat)) *
+            math.pow(math.sin(dLng / 2), 2).toDouble();
 
-    final c = 2 * atan2Approx(sqrtApprox(a), sqrtApprox(1 - a));
+    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
     return earthRadiusMeters * c;
-  }
-
-  double sinSquared(double x) {
-    final s = sinApprox(x);
-    return s * s;
-  }
-
-  // Lightweight math helpers to keep this file self-contained without dart:math
-  double sinApprox(double x) {
-    // For production, import dart:math and use sin().
-    // This approximation is enough to keep compile-time simple here.
-    // Replace with dart:math if you prefer.
-    return _trigSin(x);
-  }
-
-  double cosApprox(double x) {
-    return _trigCos(x);
-  }
-
-  double sqrtApprox(double x) {
-    return x <= 0 ? 0 : x.sqrt();
-  }
-
-  double atan2Approx(double y, double x) {
-    return y.atan2(x);
   }
 
   Future<bool> isWithinHabitLocationRadius({
@@ -444,7 +424,7 @@ class VerificationService {
       );
     }
 
-    final bool insideRadius = await isWithinHabitLocationRadius(
+    final insideRadius = await isWithinHabitLocationRadius(
       habitId: habitId,
       currentLatitude: currentLatitude,
       currentLongitude: currentLongitude,
@@ -553,14 +533,14 @@ class VerificationService {
       throw Exception('Habit not found.');
     }
 
-    final String verificationType =
-        (habit['verification_type'] ?? '').toString();
+    final verificationType =
+        (habit['verification_type'] ?? '').toString().trim();
 
-    final bool isPartnerFlow =
+    final isPartnerFlow =
         verificationType == 'partner' ||
-        verificationType == 'focus_partner' ||
-        verificationType == 'location_partner' ||
-        verificationType == 'location_focus_partner';
+            verificationType == 'focus_partner' ||
+            verificationType == 'location_partner' ||
+            verificationType == 'location_focus_partner';
 
     if (!isPartnerFlow) {
       throw Exception(
@@ -610,14 +590,40 @@ class VerificationService {
       throw Exception('You can only submit your own logs for verification.');
     }
 
+    final currentStatus = (log['status'] ?? '').toString();
+    const allowedStatuses = {
+      'pending',
+      'in_progress',
+      'ready',
+      'failed',
+      'rejected',
+    };
+
+    if (currentStatus.isNotEmpty &&
+        currentStatus != 'pending_verification' &&
+        !allowedStatuses.contains(currentStatus)) {
+      throw Exception('This log cannot be submitted from status: $currentStatus');
+    }
+
+    final existingPending = await _supabase
+        .from('log_verification_requests')
+        .select('request_id')
+        .eq('log_id', logId)
+        .eq('status', 'pending')
+        .maybeSingle();
+
+    if (existingPending != null) {
+      throw Exception('This log already has a pending verification request.');
+    }
+
     String? focusSessionId;
     bool thresholdMet = false;
     bool autoEligible = false;
     String? evidenceSnapshotId;
 
-    final bool requiresFocus =
+    final requiresFocus =
         verificationType == 'focus_partner' ||
-        verificationType == 'location_focus_partner';
+            verificationType == 'location_focus_partner';
 
     if (requiresFocus) {
       final focusResponse = await _supabase
@@ -636,9 +642,7 @@ class VerificationService {
           .maybeSingle();
 
       if (focusResponse == null) {
-        throw Exception(
-          'No focus session evidence found for this task.',
-        );
+        throw Exception('No focus session evidence found for this task.');
       }
 
       final focus = Map<String, dynamic>.from(focusResponse);
@@ -686,7 +690,7 @@ class VerificationService {
 
     final verifierUserId = verifier['verifier_user_id'].toString();
 
-    await _supabase.from('log_verification_requests').upsert({
+    await _supabase.from('log_verification_requests').insert({
       'log_id': logId,
       'habit_id': habitId,
       'requester_user_id': userId,
@@ -698,6 +702,7 @@ class VerificationService {
       'evidence_snapshot_id': evidenceSnapshotId,
       'threshold_met': thresholdMet,
       'auto_eligible': autoEligible,
+      'submitted_at': DateTime.now().toIso8601String(),
     });
 
     await _supabase.from('habit_logs').update({
@@ -711,6 +716,48 @@ class VerificationService {
     required String logId,
     String? decisionNote,
   }) async {
+    final reviewerUserId = _userId;
+
+    final requestResponse = await _supabase
+        .from('log_verification_requests')
+        .select('''
+          request_id,
+          log_id,
+          habit_id,
+          requester_user_id,
+          verifier_user_id,
+          status
+        ''')
+        .eq('request_id', requestId)
+        .maybeSingle();
+
+    if (requestResponse == null) {
+      throw Exception('Verification request not found.');
+    }
+
+    final request = Map<String, dynamic>.from(requestResponse);
+    final habitId = request['habit_id']?.toString();
+    final requesterUserId = request['requester_user_id']?.toString();
+    final verifierUserId = request['verifier_user_id']?.toString();
+    final status = (request['status'] ?? '').toString();
+
+    if (habitId == null || requesterUserId == null || verifierUserId == null) {
+      throw Exception('Verification request is missing required identifiers.');
+    }
+
+    if (verifierUserId != reviewerUserId) {
+      throw Exception('You are not the assigned verifier for this request.');
+    }
+
+    if (status != 'pending') {
+      throw Exception('This verification request is no longer pending.');
+    }
+
+    final habit = await fetchHabitById(habitId: habitId);
+    if (habit == null) {
+      throw Exception('Habit not found.');
+    }
+
     await _supabase
         .from('log_verification_requests')
         .update({
@@ -724,6 +771,20 @@ class VerificationService {
       'status': 'done',
       'closed_at': DateTime.now().toIso8601String(),
     }).eq('log_id', logId);
+
+    final basePoints = _coerceInt(habit['base_points']) ?? 0;
+    final verificationType =
+        (habit['verification_type'] ?? 'partner').toString();
+
+    await _pointsService.applyCompletionPoints(
+      userId: requesterUserId,
+      logId: logId,
+      habitId: habitId,
+      basePoints: basePoints,
+      verificationType: verificationType,
+    );
+
+    await _badgeService.evaluateAndAwardCoreBadges(userId: requesterUserId);
   }
 
   Future<void> rejectVerificationRequest({
@@ -731,6 +792,48 @@ class VerificationService {
     required String logId,
     String? decisionNote,
   }) async {
+    final reviewerUserId = _userId;
+
+    final requestResponse = await _supabase
+        .from('log_verification_requests')
+        .select('''
+          request_id,
+          log_id,
+          habit_id,
+          requester_user_id,
+          verifier_user_id,
+          status
+        ''')
+        .eq('request_id', requestId)
+        .maybeSingle();
+
+    if (requestResponse == null) {
+      throw Exception('Verification request not found.');
+    }
+
+    final request = Map<String, dynamic>.from(requestResponse);
+    final habitId = request['habit_id']?.toString();
+    final requesterUserId = request['requester_user_id']?.toString();
+    final verifierUserId = request['verifier_user_id']?.toString();
+    final status = (request['status'] ?? '').toString();
+
+    if (habitId == null || requesterUserId == null || verifierUserId == null) {
+      throw Exception('Verification request is missing required identifiers.');
+    }
+
+    if (verifierUserId != reviewerUserId) {
+      throw Exception('You are not the assigned verifier for this request.');
+    }
+
+    if (status != 'pending') {
+      throw Exception('This verification request is no longer pending.');
+    }
+
+    final habit = await fetchHabitById(habitId: habitId);
+    if (habit == null) {
+      throw Exception('Habit not found.');
+    }
+
     await _supabase
         .from('log_verification_requests')
         .update({
@@ -745,6 +848,18 @@ class VerificationService {
       'failed_at': DateTime.now().toIso8601String(),
       'failure_reason': decisionNote ?? 'Rejected by verifier',
     }).eq('log_id', logId);
+
+    final penaltyPoints = _coerceInt(habit['penalty_points']) ?? 0;
+
+    await _pointsService.applyPenaltyPoints(
+      userId: requesterUserId,
+      logId: logId,
+      habitId: habitId,
+      penaltyPoints: penaltyPoints,
+      penaltyReason: 'rejected',
+    );
+
+    await _badgeService.evaluateAndAwardCoreBadges(userId: requesterUserId);
   }
 
   // =========================================================
@@ -764,66 +879,4 @@ class VerificationService {
     if (value is int) return value.toDouble();
     return double.tryParse(value.toString());
   }
-
-  // =========================================================
-  // SMALL NUMERIC HELPERS
-  // =========================================================
-
-  // These helpers let the file stay drop-in ready without importing dart:math.
-  // Replace with dart:math versions if you prefer.
-
-  double _trigSin(double x) {
-    double term = x;
-    double sum = x;
-    for (int i = 1; i < 7; i++) {
-      term *= -1 * x * x / ((2 * i) * (2 * i + 1));
-      sum += term;
-    }
-    return sum;
-  }
-
-  double _trigCos(double x) {
-    double term = 1;
-    double sum = 1;
-    for (int i = 1; i < 7; i++) {
-      term *= -1 * x * x / ((2 * i - 1) * (2 * i));
-      sum += term;
-    }
-    return sum;
-  }
-}
-
-extension _DoubleMathExtension on double {
-  double sqrt() {
-    if (this <= 0) return 0;
-    double guess = this / 2;
-    for (int i = 0; i < 12; i++) {
-      guess = 0.5 * (guess + this / guess);
-    }
-    return guess;
-  }
-
-  double atan2(double x) {
-    if (x == 0) {
-      if (this > 0) return 1.57079632679;
-      if (this < 0) return -1.57079632679;
-      return 0;
-    }
-
-    final z = this / x;
-    double atan;
-
-    if (z.abs() < 1) {
-      atan = z / (1 + 0.28 * z * z);
-      if (x < 0) {
-        return this < 0 ? atan - 3.141592653589793 : atan + 3.141592653589793;
-      }
-      return atan;
-    } else {
-      atan = 1.57079632679 - z / (z * z + 0.28);
-      return this < 0 ? atan - 3.141592653589793 : atan;
-    }
-  }
-
-  double abs() => this < 0 ? -this : this;
 }

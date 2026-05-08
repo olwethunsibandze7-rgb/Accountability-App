@@ -1,4 +1,4 @@
-// ignore_for_file: unused_local_variable, unused_element, use_build_context_synchronously, unused_import
+// ignore_for_file: unused_local_variable, unused_element, use_build_context_synchronously, unused_import, unused_field, duplicate_import
 
 import 'dart:async';
 
@@ -7,11 +7,14 @@ import 'package:achievr_app/Screens/Dashboard/focus_mode_screen.dart';
 import 'package:achievr_app/Screens/Social/set_habit_location_screen.dart';
 import 'package:achievr_app/Screens/habit_log_service.dart';
 import 'package:achievr_app/Services/app_clock.dart';
+import 'package:achievr_app/Services/badge_service.dart';
 import 'package:achievr_app/Services/focus_engine_models.dart';
 import 'package:achievr_app/Services/habit_location_service.dart';
 import 'package:achievr_app/Services/location_runtime_service.dart';
+import 'package:achievr_app/Services/points_service.dart';
 import 'package:achievr_app/Services/verification_service.dart';
 import 'package:achievr_app/Widgets/hold_to_refresh_wrapper.dart';
+import 'package:achievr_app/Widgets/points_feedback.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -26,9 +29,11 @@ class TodayScreen extends ConsumerStatefulWidget {
 
 class _TodayScreenState extends ConsumerState<TodayScreen> {
   final SupabaseClient supabase = Supabase.instance.client;
+  final PointsService _pointsService = PointsService();
   final HabitLogService _habitLogService = HabitLogService();
   final VerificationService _verificationService = VerificationService();
   final HabitLocationService _habitLocationService = HabitLocationService();
+  final BadgeService _badgeService = BadgeService();
   final LocationRuntimeService _locationRuntimeService =
       LocationRuntimeService();
 
@@ -72,6 +77,61 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
     AppClock.debugNowNotifier.removeListener(_handleClockChange);
     _clockTimer?.cancel();
     super.dispose();
+  }
+
+  int _habitPenaltyPointsFromLog(Map<String, dynamic> log) {
+    final habit = log['habits'];
+
+    if (habit is Map<String, dynamic>) {
+      final raw = habit['penalty_points'];
+      if (raw is int) return raw;
+      if (raw is double) return raw.round();
+      return int.tryParse('${raw ?? ''}') ?? 0;
+    }
+
+    if (habit is Map) {
+      final raw = habit['penalty_points'];
+      if (raw is int) return raw;
+      if (raw is double) return raw.round();
+      return int.tryParse('${raw ?? ''}') ?? 0;
+    }
+
+    return int.tryParse('${log['penalty_points'] ?? ''}') ?? 0;
+  }
+
+  Future<void> _applyMissedPenaltiesIfNeeded(
+    List<Map<String, dynamic>> logs,
+  ) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    for (final log in logs) {
+      final state = _taskState(log);
+      if (state != 'missed') continue;
+
+      final logId = log['log_id']?.toString();
+      final habitId = _extractHabitId(log);
+
+      if (logId == null || logId.isEmpty) continue;
+      if (habitId == null || habitId.isEmpty) continue;
+
+      final penaltyPoints = _habitPenaltyPointsFromLog(log);
+
+      try {
+        await _pointsService.applyPenaltyPoints(
+          userId: user.id,
+          logId: logId,
+          habitId: habitId,
+          penaltyPoints: penaltyPoints,
+          penaltyReason: 'missed',
+        );
+
+        await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+      } catch (e, st) {
+        debugPrint('MISSED PENALTY ERROR for log $logId: $e');
+        debugPrint('$st');
+      }
+    }
   }
 
   int _timeToMinutes(String? hhmmss) {
@@ -133,6 +193,8 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
       final logs = await _habitLogService.fetchTodayLogs()
         ..sort(_compareLogsByStartTime);
 
+      await _applyMissedPenaltiesIfNeeded(logs);
+
       if (!mounted) return;
 
       setState(() {
@@ -188,6 +250,18 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
   }
 
   String _verificationType(Map<String, dynamic> log) {
+    final habit = log['habits'];
+
+    if (habit is Map<String, dynamic>) {
+      return (habit['verification_type'] ?? log['verification_type'] ?? 'manual')
+          .toString();
+    }
+
+    if (habit is Map) {
+      return (habit['verification_type'] ?? log['verification_type'] ?? 'manual')
+          .toString();
+    }
+
     return (log['verification_type'] ?? 'manual').toString();
   }
 
@@ -360,7 +434,12 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
 
   Future<void> _markLogDone(Map<String, dynamic> log) async {
     final logId = log['log_id']?.toString();
+    final habitId = _extractHabitId(log);
+    final user = supabase.auth.currentUser;
+
     if (logId == null || logId.isEmpty) return;
+    if (habitId == null || habitId.isEmpty) return;
+    if (user == null) return;
 
     final availability = _manualCompletionAvailability(log);
     if (!availability.canCompleteNow) {
@@ -376,24 +455,58 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
       });
 
       await _habitLogService.markLogDone(logId: logId);
+
+      final habit = log['habits'];
+      final basePoints = (() {
+        if (habit is Map<String, dynamic>) {
+          final raw = habit['base_points'];
+          if (raw is int) return raw;
+          if (raw is double) return raw.round();
+          return int.tryParse('${raw ?? ''}') ?? 0;
+        }
+        if (habit is Map) {
+          final raw = habit['base_points'];
+          if (raw is int) return raw;
+          if (raw is double) return raw.round();
+          return int.tryParse('${raw ?? ''}') ?? 0;
+        }
+        return int.tryParse('${log['base_points'] ?? ''}') ?? 0;
+      })();
+
+      final verificationType = _verificationType(log);
+
+      await _pointsService.applyCompletionPoints(
+        userId: user.id,
+        logId: logId,
+        habitId: habitId,
+        basePoints: basePoints,
+        verificationType: verificationType,
+      );
+
+      await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+
       await _loadTodayData();
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Habit marked as done.')),
+      final awarded = _pointsService.calculateCompletionAward(
+        basePoints: basePoints,
+        verificationType: verificationType,
       );
-    } catch (e) {
+
+      PointsDeltaOverlay.show(context, delta: awarded);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Habit marked as done. +$awarded points')),
+      );
+    } catch (e, st) {
       debugPrint('MARK LOG DONE ERROR: $e');
+      debugPrint('$st');
 
       if (!mounted) return;
 
-      setState(() {
-        _isUpdatingLog = false;
-      });
-
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to mark habit as done.')),
+        SnackBar(content: Text('Failed to mark habit as done: $e')),
       );
     } finally {
       if (mounted) {

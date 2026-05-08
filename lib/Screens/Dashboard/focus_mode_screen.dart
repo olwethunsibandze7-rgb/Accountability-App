@@ -1,14 +1,21 @@
 // ignore_for_file: deprecated_member_use, use_build_context_synchronously
 
+import 'dart:io';
+
 import 'package:achievr_app/Providers/focus_runtime_controller_provider.dart';
 import 'package:achievr_app/Screens/Social/verification_settings_screen.dart';
 import 'package:achievr_app/Services/app_clock.dart';
+import 'package:achievr_app/Services/badge_service.dart';
 import 'package:achievr_app/Services/focus_engine_models.dart';
 import 'package:achievr_app/Services/habit_location_service.dart';
 import 'package:achievr_app/Services/location_runtime_service.dart';
+import 'package:achievr_app/Services/points_service.dart';
+import 'package:achievr_app/Widgets/points_feedback.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class FocusModeScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> log;
@@ -26,15 +33,24 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
   final HabitLocationService _habitLocationService = HabitLocationService();
   final LocationRuntimeService _locationRuntimeService =
       LocationRuntimeService();
+  final PointsService _pointsService = PointsService();
+  final BadgeService _badgeService = BadgeService();
 
   bool _isStarting = false;
   bool _isCompleting = false;
   bool _isAbandoning = false;
   bool _isPreparingLocation = false;
 
+  String? _lastHandledPenaltyStatus;
+  bool _isApplyingAutoFailurePenalty = false;
+
+  bool get _supportsNativeFocusRuntime => !kIsWeb && Platform.isAndroid;
+
   @override
   void initState() {
     super.initState();
+
+    AppClock.debugNowNotifier.addListener(_handleClockChange);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final controller = ref.read(focusRuntimeControllerProvider);
@@ -46,6 +62,17 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
 
       await controller.attachToLog(widget.log);
     });
+  }
+
+  @override
+  void dispose() {
+    AppClock.debugNowNotifier.removeListener(_handleClockChange);
+    super.dispose();
+  }
+
+  void _handleClockChange() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   String? get _logId => widget.log['log_id']?.toString();
@@ -161,6 +188,24 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     return 'This task is outside its execution window.';
   }
 
+  int _habitBasePoints(Map<String, dynamic>? habit) {
+    final raw = habit?['base_points'];
+    if (raw is int) return raw;
+    if (raw is double) return raw.round();
+    return int.tryParse('${raw ?? ''}') ?? 0;
+  }
+
+  int _habitPenaltyPoints(Map<String, dynamic>? habit) {
+    final raw = habit?['penalty_points'];
+    if (raw is int) return raw;
+    if (raw is double) return raw.round();
+    return int.tryParse('${raw ?? ''}') ?? 0;
+  }
+
+  String _habitVerificationType(Map<String, dynamic>? habit) {
+    return (habit?['verification_type'] ?? 'focus_auto').toString();
+  }
+
   Future<void> _refreshController() async {
     final controller = ref.read(focusRuntimeControllerProvider);
     final requestedLogId = widget.log['log_id']?.toString();
@@ -264,6 +309,12 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
         _isStarting = true;
       });
 
+      if (!_supportsNativeFocusRuntime) {
+        throw Exception(
+          'Live Focus Mode works on Android phones and Android emulators only.',
+        );
+      }
+
       if (runtimeState.hasLiveSession) {
         throw Exception('This task already has an active focus session.');
       }
@@ -272,8 +323,7 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
         throw Exception(_executionWindowMessage);
       }
 
-      final hasPinnedLocation =
-          await _ensureLocationConfigExists(needsLocation);
+      final hasPinnedLocation = await _ensureLocationConfigExists(needsLocation);
       if (!hasPinnedLocation) {
         throw Exception('This habit needs location setup first.');
       }
@@ -281,6 +331,8 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
       if (!runtimeState.usageAccessReady) {
         throw Exception('Usage access is required for focus mode.');
       }
+
+      _lastHandledPenaltyStatus = null;
 
       await controller.startSessionForAttachedLog();
 
@@ -306,6 +358,16 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
 
   Future<void> _completeFocus() async {
     final controller = ref.read(focusRuntimeControllerProvider);
+    final runtimeState = controller.state;
+    final user = Supabase.instance.client.auth.currentUser;
+
+    final logId = runtimeState.logId ?? _logId;
+    final habitId = runtimeState.habitId ?? _habitId;
+    final habit = runtimeState.habit;
+
+    if (user == null) return;
+    if (logId == null || logId.isEmpty) return;
+    if (habitId == null || habitId.isEmpty) return;
 
     try {
       setState(() {
@@ -314,18 +376,82 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
 
       await controller.completeSession();
 
-      if (!mounted) return;
-
       final engineState = controller.state.engineState;
       final thresholdMet = engineState?.thresholdMet ?? false;
       final phase = controller.state.phaseLabel;
 
+      if (thresholdMet) {
+        final basePoints = _habitBasePoints(habit);
+        final verificationType = _habitVerificationType(habit);
+
+        await _pointsService.applyCompletionPoints(
+          userId: user.id,
+          logId: logId,
+          habitId: habitId,
+          basePoints: basePoints,
+          verificationType: verificationType,
+        );
+
+        await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+
+        final awarded = _pointsService.calculateCompletionAward(
+          basePoints: basePoints,
+          verificationType: verificationType,
+        );
+
+        if (!mounted) return;
+
+        PointsDeltaOverlay.show(context, delta: awarded);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Focus session completed. +$awarded points'),
+          ),
+        );
+        return;
+      }
+
+      final finalSession = controller.state.session;
+      final finalStatus = (finalSession?['status'] ?? '').toString();
+
+      if (finalStatus == 'failed') {
+        final penaltyPoints = _habitPenaltyPoints(habit);
+
+        await _pointsService.applyPenaltyPoints(
+          userId: user.id,
+          logId: logId,
+          habitId: habitId,
+          penaltyPoints: penaltyPoints,
+          penaltyReason: 'failed',
+        );
+
+        await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+
+        _lastHandledPenaltyStatus = 'failed';
+
+        final penaltyDelta = _pointsService.calculatePenalty(
+          penaltyPoints: penaltyPoints,
+          penaltyReason: 'failed',
+        );
+
+        if (!mounted) return;
+
+        PointsDeltaOverlay.show(context, delta: penaltyDelta);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Focus session failed. -${penaltyDelta.abs()} points'),
+          ),
+        );
+        return;
+      }
+
+      if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            thresholdMet
-                ? 'Focus session completed.'
-                : 'Focus session ended, but threshold was not met ($phase).',
+            'Focus session ended, but threshold was not met ($phase).',
           ),
         ),
       );
@@ -346,6 +472,16 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
 
   Future<void> _abandonFocus() async {
     final controller = ref.read(focusRuntimeControllerProvider);
+    final runtimeState = controller.state;
+    final user = Supabase.instance.client.auth.currentUser;
+
+    final logId = runtimeState.logId ?? _logId;
+    final habitId = runtimeState.habitId ?? _habitId;
+    final habit = runtimeState.habit;
+
+    if (user == null) return;
+    if (logId == null || logId.isEmpty) return;
+    if (habitId == null || habitId.isEmpty) return;
 
     try {
       setState(() {
@@ -354,10 +490,33 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
 
       await controller.abandonSession();
 
+      final penaltyPoints = _habitPenaltyPoints(habit);
+
+      await _pointsService.applyPenaltyPoints(
+        userId: user.id,
+        logId: logId,
+        habitId: habitId,
+        penaltyPoints: penaltyPoints,
+        penaltyReason: 'abandoned',
+      );
+
+      await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+
+      _lastHandledPenaltyStatus = 'abandoned';
+
+      final penaltyDelta = _pointsService.calculatePenalty(
+        penaltyPoints: penaltyPoints,
+        penaltyReason: 'abandoned',
+      );
+
       if (!mounted) return;
 
+      PointsDeltaOverlay.show(context, delta: penaltyDelta);
+
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Focus session abandoned.')),
+        SnackBar(
+          content: Text('Focus session abandoned. -${penaltyDelta.abs()} points'),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
@@ -371,6 +530,63 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
           _isAbandoning = false;
         });
       }
+    }
+  }
+
+  Future<void> _maybeApplyAutoFailurePenalty() async {
+    if (_isApplyingAutoFailurePenalty) return;
+
+    final controller = ref.read(focusRuntimeControllerProvider);
+    final runtimeState = controller.state;
+    final user = Supabase.instance.client.auth.currentUser;
+
+    final session = runtimeState.session;
+    final status = (session?['status'] ?? '').toString();
+
+    if (status != 'failed') return;
+    if (_lastHandledPenaltyStatus == 'failed') return;
+
+    final logId = runtimeState.logId ?? _logId;
+    final habitId = runtimeState.habitId ?? _habitId;
+    final habit = runtimeState.habit;
+
+    if (user == null || logId == null || habitId == null) return;
+
+    try {
+      _isApplyingAutoFailurePenalty = true;
+
+      final penaltyPoints = _habitPenaltyPoints(habit);
+
+      await _pointsService.applyPenaltyPoints(
+        userId: user.id,
+        logId: logId,
+        habitId: habitId,
+        penaltyPoints: penaltyPoints,
+        penaltyReason: 'failed',
+      );
+
+      await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+
+      _lastHandledPenaltyStatus = 'failed';
+
+      final penaltyDelta = _pointsService.calculatePenalty(
+        penaltyPoints: penaltyPoints,
+        penaltyReason: 'failed',
+      );
+
+      if (!mounted) return;
+
+      PointsDeltaOverlay.show(context, delta: penaltyDelta);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Focus session failed. -${penaltyDelta.abs()} points'),
+        ),
+      );
+    } catch (_) {
+      // Do not crash the screen if penalty application fails.
+    } finally {
+      _isApplyingAutoFailurePenalty = false;
     }
   }
 
@@ -479,13 +695,14 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     required String title,
     required String text,
     Widget? action,
+    Color? borderColor,
   }) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF17171A),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF232329)),
+        border: Border.all(color: borderColor ?? const Color(0xFF232329)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -521,6 +738,10 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     final runtimeState = ref.watch(focusRuntimeControllerProvider).state;
     final engineState = runtimeState.engineState;
     final phase = engineState?.phase;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeApplyAutoFailurePenalty();
+    });
 
     if (runtimeState.isLoading && runtimeState.session == null) {
       return const Scaffold(
@@ -558,7 +779,8 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     final canStart = !hasLiveSession &&
         !isTerminal &&
         runtimeState.session == null &&
-        _isWithinExecutionWindow;
+        _isWithinExecutionWindow &&
+        _supportsNativeFocusRuntime;
 
     final verificationType =
         (runtimeState.habit?['verification_type'] ?? '').toString();
@@ -690,6 +912,15 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
               ],
             ),
           ),
+          if (!_supportsNativeFocusRuntime) ...[
+            const SizedBox(height: 12),
+            _buildSimpleInfoCard(
+              title: 'Unsupported runtime',
+              text:
+                  'Live Focus Mode monitoring works on Android phones and Android emulators. You can still browse this screen here, but live app monitoring cannot start on this target.',
+              borderColor: const Color(0xFFFFB74D),
+            ),
+          ],
           if (isTerminal) ...[
             const SizedBox(height: 12),
             Container(
@@ -755,11 +986,12 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
           const SizedBox(height: 16),
           _buildSimpleInfoCard(
             title: 'Focus rules',
-            text: needsLocation
-                ? 'Achievr is always allowed. Counting continues while you stay in Achievr or an allowed app. Location setup and permissions are managed from Verification.'
-                : 'Achievr is always allowed. Counting continues while you stay in Achievr or an allowed app. A short warning phase happens before grace begins.',
-            action: (needsLocation &&
-                    !runtimeState.locationPermissionReady)
+            text: !_supportsNativeFocusRuntime
+                ? 'This target can view the Focus screen, but live app monitoring only runs on Android devices and Android emulators.'
+                : needsLocation
+                    ? 'Achievr is always allowed. Counting continues while you stay in Achievr or an allowed app. Location setup and permissions are managed from Verification.'
+                    : 'Achievr is always allowed. Counting continues while you stay in Achievr or an allowed app. A warning hold runs before grace begins.',
+            action: (needsLocation && !runtimeState.locationPermissionReady)
                 ? SizedBox(
                     width: double.infinity,
                     child: OutlinedButton(
@@ -821,11 +1053,17 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
                   disabledBackgroundColor: const Color(0xFF2A2A2F),
                   disabledForegroundColor: const Color(0xFF6F6F76),
                 ),
-                icon: const Icon(Icons.lock_outline),
+                icon: Icon(
+                  _supportsNativeFocusRuntime
+                      ? Icons.lock_outline
+                      : Icons.desktop_windows_outlined,
+                ),
                 label: Text(
-                  _isWithinExecutionWindow
-                      ? 'Focus unavailable'
-                      : 'Outside execution window',
+                  !_supportsNativeFocusRuntime
+                      ? 'Android device or emulator required'
+                      : _isWithinExecutionWindow
+                          ? 'Focus unavailable'
+                          : 'Outside execution window',
                 ),
               ),
             ),

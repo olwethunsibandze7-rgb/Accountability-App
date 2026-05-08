@@ -1,9 +1,13 @@
+// ignore_for_file: unused_element_parameter
+
+import 'package:achievr_app/Screens/Social/friend_profile_screen.dart';
 import 'package:achievr_app/Screens/Social/friend_requests_screen.dart';
 import 'package:achievr_app/Screens/Social/friends_screen.dart';
 import 'package:achievr_app/Screens/Social/shared_progress_screen.dart';
 import 'package:achievr_app/Screens/Social/verification_settings_screen.dart';
 import 'package:achievr_app/Screens/home_screen.dart';
 import 'package:achievr_app/Widgets/hold_to_refresh_wrapper.dart';
+import 'package:achievr_app/Widgets/points_feedback.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -23,6 +27,9 @@ class _SocialScreenState extends State<SocialScreen> {
   String? _error;
 
   Map<String, dynamic>? _profile;
+  Map<String, dynamic>? _disciplineStats;
+  List<Map<String, dynamic>> _recentBadges = [];
+
   int _allTimeDone = 0;
   int _activeGoals = 0;
   int _activeHabits = 0;
@@ -51,21 +58,82 @@ class _SocialScreenState extends State<SocialScreen> {
         return;
       }
 
-      final profileResponse = await supabase
+      final profileFuture = supabase
           .from('profiles')
-          .select(
-            'username, plan_tier, strict_mode_enabled, wake_time, sleep_time',
-          )
+          .select('''
+            id,
+            username,
+            public_handle,
+            plan_tier,
+            strict_mode_enabled,
+            wake_time,
+            sleep_time,
+            current_title,
+            prestige_level,
+            accountability_score_visible
+          ''')
           .eq('id', user.id)
           .maybeSingle();
 
-      final goalsResponse = await supabase
+      final statsFuture = supabase
+          .from('user_discipline_stats')
+          .select('''
+            user_id,
+            execution_points,
+            current_streak,
+            best_streak,
+            total_completed,
+            total_failed,
+            total_missed,
+            clean_sessions
+          ''')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+      final goalsFuture = supabase
           .from('goals')
           .select('goal_id')
           .eq('user_id', user.id)
           .eq('active', true);
 
-      final goals = List<Map<String, dynamic>>.from(goalsResponse);
+      final allDoneFuture = supabase
+          .from('habit_logs')
+          .select('log_id')
+          .eq('user_id', user.id)
+          .eq('status', 'done');
+
+      final badgesFuture = supabase
+          .from('user_badges')
+          .select('''
+            user_badge_id,
+            awarded_at,
+            badge_definitions (
+              badge_id,
+              code,
+              title,
+              description,
+              icon,
+              rarity,
+              category
+            )
+          ''')
+          .eq('user_id', user.id)
+          .order('awarded_at', ascending: false)
+          .limit(6);
+
+      final results = await Future.wait<dynamic>([
+        profileFuture,
+        statsFuture,
+        goalsFuture,
+        allDoneFuture,
+        badgesFuture,
+      ]);
+
+      final profileResponse = results[0] as Map<String, dynamic>?;
+      final statsResponse = results[1] as Map<String, dynamic>?;
+      final goals = List<Map<String, dynamic>>.from(results[2] as List);
+      final allDone = List<Map<String, dynamic>>.from(results[3] as List);
+      final recentBadges = List<Map<String, dynamic>>.from(results[4] as List);
 
       int activeHabits = 0;
 
@@ -81,18 +149,12 @@ class _SocialScreenState extends State<SocialScreen> {
         activeHabits = List<Map<String, dynamic>>.from(habitsResponse).length;
       }
 
-      final allDoneResponse = await supabase
-          .from('habit_logs')
-          .select('log_id')
-          .eq('user_id', user.id)
-          .eq('status', 'done');
-
-      final allDone = List<Map<String, dynamic>>.from(allDoneResponse);
-
       if (!mounted) return;
 
       setState(() {
         _profile = profileResponse;
+        _disciplineStats = statsResponse;
+        _recentBadges = recentBadges;
         _activeGoals = goals.length;
         _activeHabits = activeHabits;
         _allTimeDone = allDone.length;
@@ -169,6 +231,21 @@ class _SocialScreenState extends State<SocialScreen> {
     ).then((_) => _loadSocialData());
   }
 
+  void _openOwnProfile() {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FriendProfileScreen(
+          userId: user.id,
+          isFriend: true,
+        ),
+      ),
+    ).then((_) => _loadSocialData());
+  }
+
   void _showProfileSheet() {
     showModalBottomSheet(
       context: context,
@@ -182,86 +259,180 @@ class _SocialScreenState extends State<SocialScreen> {
           top: false,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 42,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF3A3A42),
-                    borderRadius: BorderRadius.circular(99),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 42,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF3A3A42),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 18),
-                Container(
-                  width: 68,
-                  height: 68,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF101013),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: const Color(0xFF232329)),
-                  ),
-                  child: Center(
-                    child: Text(
-                      _username.isNotEmpty ? _username[0].toUpperCase() : 'U',
-                      style: const TextStyle(
-                        color: Color(0xFFF5F5F5),
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
+                  const SizedBox(height: 18),
+                  Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF101013),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0xFF232329)),
+                    ),
+                    child: Center(
+                      child: Text(
+                        _username.isNotEmpty ? _username[0].toUpperCase() : 'U',
+                        style: const TextStyle(
+                          color: Color(0xFFF5F5F5),
+                          fontSize: 26,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  _username,
-                  style: const TextStyle(
-                    color: Color(0xFFF5F5F5),
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
+                  const SizedBox(height: 14),
+                  Text(
+                    _username,
+                    style: const TextStyle(
+                      color: Color(0xFFF5F5F5),
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Plan: ${_planTier.toUpperCase()}',
-                  style: const TextStyle(
-                    color: Color(0xFF9A9AA3),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                  const SizedBox(height: 6),
+                  Text(
+                    _publicHandle.isNotEmpty ? '@$_publicHandle' : _currentTitle,
+                    style: const TextStyle(
+                      color: Color(0xFF9A9AA3),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 20),
-                _buildInfoRow('Strict mode', _strictMode ? 'Enabled' : 'Disabled'),
-                _buildInfoRow('Wake time', _formatTimeDisplay(_wakeTime)),
-                _buildInfoRow('Sleep time', _formatTimeDisplay(_sleepTime)),
-                _buildInfoRow('Active goals', '$_activeGoals'),
-                _buildInfoRow('Active habits', '$_activeHabits'),
-                _buildInfoRow('All-time done', '$_allTimeDone'),
-                const SizedBox(height: 18),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: _isSigningOut ? null : _signOut,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFF5F5F5),
-                      foregroundColor: Colors.black,
-                      disabledBackgroundColor: const Color(0xFF2A2A2F),
-                      disabledForegroundColor: const Color(0xFF6F6F76),
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      _buildMiniPill(label: _currentTitle, filled: true),
+                      _buildMiniPill(label: 'Lv $_prestigeLevel'),
+                      _buildMiniPill(label: '$_executionPoints XP'),
+                      _buildMiniPill(label: 'Streak $_currentStreak'),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildMetricChip(
+                          label: 'Points',
+                          value: _executionPoints.toString(),
+                        ),
                       ),
-                      elevation: 0,
-                    ),
-                    icon: const Icon(Icons.logout),
-                    label: Text(
-                      _isSigningOut ? 'Signing Out...' : 'Sign Out',
-                      style: const TextStyle(fontWeight: FontWeight.w700),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _buildMetricChip(
+                          label: 'Current Streak',
+                          value: _currentStreak.toString(),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildMetricChip(
+                          label: 'Best Streak',
+                          value: _bestStreak.toString(),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _buildMetricChip(
+                          label: 'Clean Sessions',
+                          value: _cleanSessions.toString(),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  _buildInfoRow('Plan', _planTier.toUpperCase()),
+                  _buildInfoRow('Strict mode', _strictMode ? 'Enabled' : 'Disabled'),
+                  _buildInfoRow('Wake time', _formatTimeDisplay(_wakeTime)),
+                  _buildInfoRow('Sleep time', _formatTimeDisplay(_sleepTime)),
+                  _buildInfoRow('Active goals', '$_activeGoals'),
+                  _buildInfoRow('Active habits', '$_activeHabits'),
+                  _buildInfoRow('All-time done', '$_allTimeDone'),
+                  _buildInfoRow('Total failed', _totalFailed.toString()),
+                  _buildInfoRow('Total missed', _totalMissed.toString()),
+                  const SizedBox(height: 18),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: _buildSectionTitle(
+                      'Recent badges',
+                      subtitle: 'Your most recently unlocked identity markers.',
                     ),
                   ),
-                ),
-              ],
+                  if (_recentBadges.isEmpty)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF101013),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFF232329)),
+                      ),
+                      child: const Text(
+                        'No badges unlocked yet.',
+                        style: TextStyle(color: Color(0xFF9A9AA3)),
+                      ),
+                    )
+                  else
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: _recentBadges.map(_buildBadgeTile).toList(),
+                    ),
+                  const SizedBox(height: 18),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      onPressed: _openOwnProfile,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFF5F5F5),
+                        side: const BorderSide(color: Color(0xFF3A3A42)),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: const Text('Open Full Profile'),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _isSigningOut ? null : _signOut,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFF5F5F5),
+                        foregroundColor: Colors.black,
+                        disabledBackgroundColor: const Color(0xFF2A2A2F),
+                        disabledForegroundColor: const Color(0xFF6F6F76),
+                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        elevation: 0,
+                      ),
+                      icon: const Icon(Icons.logout),
+                      label: Text(
+                        _isSigningOut ? 'Signing Out...' : 'Sign Out',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         );
@@ -275,6 +446,14 @@ class _SocialScreenState extends State<SocialScreen> {
       return username.trim();
     }
     return 'User';
+  }
+
+  String get _publicHandle {
+    final handle = _profile?['public_handle'];
+    if (handle is String && handle.trim().isNotEmpty) {
+      return handle.trim();
+    }
+    return '';
   }
 
   String get _planTier {
@@ -296,6 +475,63 @@ class _SocialScreenState extends State<SocialScreen> {
   }
 
   bool get _strictMode => _profile?['strict_mode_enabled'] == true;
+
+  String get _currentTitle {
+    final title = _profile?['current_title'];
+    if (title is String && title.trim().isNotEmpty) {
+      return title.trim();
+    }
+    return 'Starter';
+  }
+
+  int get _prestigeLevel {
+    final value = _profile?['prestige_level'];
+    if (value is int) return value;
+    if (value is double) return value.round();
+    return int.tryParse('${value ?? ''}') ?? 1;
+  }
+
+  int get _executionPoints {
+    final value = _disciplineStats?['execution_points'];
+    if (value is int) return value;
+    if (value is double) return value.round();
+    return int.tryParse('${value ?? ''}') ?? 0;
+  }
+
+  int get _currentStreak {
+    final value = _disciplineStats?['current_streak'];
+    if (value is int) return value;
+    if (value is double) return value.round();
+    return int.tryParse('${value ?? ''}') ?? 0;
+  }
+
+  int get _bestStreak {
+    final value = _disciplineStats?['best_streak'];
+    if (value is int) return value;
+    if (value is double) return value.round();
+    return int.tryParse('${value ?? ''}') ?? 0;
+  }
+
+  int get _cleanSessions {
+    final value = _disciplineStats?['clean_sessions'];
+    if (value is int) return value;
+    if (value is double) return value.round();
+    return int.tryParse('${value ?? ''}') ?? 0;
+  }
+
+  int get _totalFailed {
+    final value = _disciplineStats?['total_failed'];
+    if (value is int) return value;
+    if (value is double) return value.round();
+    return int.tryParse('${value ?? ''}') ?? 0;
+  }
+
+  int get _totalMissed {
+    final value = _disciplineStats?['total_missed'];
+    if (value is int) return value;
+    if (value is double) return value.round();
+    return int.tryParse('${value ?? ''}') ?? 0;
+  }
 
   String _formatTimeDisplay(String raw) {
     if (raw == '--:--') return raw;
@@ -376,6 +612,30 @@ class _SocialScreenState extends State<SocialScreen> {
     );
   }
 
+  Widget _buildMiniPill({
+    required String label,
+    bool filled = false,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: filled ? const Color(0xFFF5F5F5) : const Color(0xFF101013),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: filled ? const Color(0xFFF5F5F5) : const Color(0xFF232329),
+        ),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: filled ? Colors.black : const Color(0xFFF5F5F5),
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
   Widget _buildTopBar() {
     return Row(
       children: [
@@ -413,24 +673,69 @@ class _SocialScreenState extends State<SocialScreen> {
   Widget _buildProfileAvatarButton() {
     return GestureDetector(
       onTap: _showProfileSheet,
-      child: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: const Color(0xFF17171A),
-          shape: BoxShape.circle,
-          border: Border.all(color: const Color(0xFF232329)),
-        ),
-        child: Center(
-          child: Text(
-            _username.isNotEmpty ? _username[0].toUpperCase() : 'U',
-            style: const TextStyle(
-              color: Color(0xFFF5F5F5),
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xFF17171A),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: const Color(0xFF232329)),
+            ),
+            child: Row(
+              children: [
+                Text(
+                  'Lv $_prestigeLevel',
+                  style: const TextStyle(
+                    color: Color(0xFF9A9AA3),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  '•',
+                  style: TextStyle(
+                    color: Color(0xFF4FC3F7),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                AnimatedPointsText(
+                  value: _executionPoints,
+                  style: const TextStyle(
+                    color: Color(0xFFF5F5F5),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                  suffix: ' XP',
+                ),
+              ],
             ),
           ),
-        ),
+          const SizedBox(width: 8),
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: const Color(0xFF17171A),
+              shape: BoxShape.circle,
+              border: Border.all(color: const Color(0xFF232329)),
+            ),
+            child: Center(
+              child: Text(
+                _username.isNotEmpty ? _username[0].toUpperCase() : 'U',
+                style: const TextStyle(
+                  color: Color(0xFFF5F5F5),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -469,6 +774,16 @@ class _SocialScreenState extends State<SocialScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildMiniPill(label: _currentTitle, filled: true),
+              _buildMiniPill(label: 'Lv $_prestigeLevel'),
+              _buildMiniPill(label: 'Streak $_currentStreak'),
+            ],
+          ),
+          const SizedBox(height: 14),
           Text(
             'Hey, $_username',
             style: const TextStyle(
@@ -478,10 +793,10 @@ class _SocialScreenState extends State<SocialScreen> {
               height: 1.1,
             ),
           ),
-          const SizedBox(height: 10),
-          const Text(
-            'Build your accountability circle, manage verification, and control what progress other people can see.',
-            style: TextStyle(
+          const SizedBox(height: 8),
+          Text(
+            'You are building a $_currentTitle identity. Keep stacking verified wins so friends instantly see progress, level, and accountability strength.',
+            style: const TextStyle(
               color: Color(0xFFB3B3BB),
               height: 1.45,
               fontSize: 14,
@@ -492,6 +807,13 @@ class _SocialScreenState extends State<SocialScreen> {
             children: [
               Expanded(
                 child: _buildMetricChip(
+                  label: 'Points',
+                  value: _executionPoints.toString(),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildMetricChip(
                   label: 'All-Time Done',
                   value: '$_allTimeDone',
                 ),
@@ -499,8 +821,8 @@ class _SocialScreenState extends State<SocialScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: _buildMetricChip(
-                  label: 'Active Goals',
-                  value: '$_activeGoals',
+                  label: 'Current Streak',
+                  value: _currentStreak.toString(),
                 ),
               ),
             ],
@@ -523,7 +845,7 @@ class _SocialScreenState extends State<SocialScreen> {
         children: [
           _buildSectionTitle(
             'Social hub',
-            subtitle: 'Four clear surfaces for your accountability system.',
+            subtitle: 'Four clean entry points for your accountability system.',
           ),
           Row(
             children: [
@@ -531,7 +853,7 @@ class _SocialScreenState extends State<SocialScreen> {
                 child: _buildActionCard(
                   icon: Icons.group_outlined,
                   title: 'Friends',
-                  subtitle: 'Friends + search in one place',
+                  subtitle: 'Search and view status-rich profiles',
                   onTap: _openFriends,
                 ),
               ),
@@ -586,7 +908,7 @@ class _SocialScreenState extends State<SocialScreen> {
         children: [
           _buildSectionTitle(
             'Accountability baseline',
-            subtitle: 'Core values shaping your social system.',
+            subtitle: 'The profile details people should eventually recognize.',
           ),
           Row(
             children: [
@@ -599,16 +921,69 @@ class _SocialScreenState extends State<SocialScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: _buildMetricChip(
-                  label: 'Plan',
-                  value: _planTier.toUpperCase(),
+                  label: 'Active Goals',
+                  value: '$_activeGoals',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildMetricChip(
+                  label: 'Best Streak',
+                  value: _bestStreak.toString(),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 12),
+          _buildInfoRow('Title', _currentTitle),
+          _buildInfoRow('Plan', _planTier.toUpperCase()),
           _buildInfoRow('Strict mode', _strictMode ? 'Enabled' : 'Disabled'),
           _buildInfoRow('Wake time', _formatTimeDisplay(_wakeTime)),
           _buildInfoRow('Sleep time', _formatTimeDisplay(_sleepTime)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBadgeTile(Map<String, dynamic> row) {
+    final badge = row['badge_definitions'] as Map<String, dynamic>?;
+    final title = (badge?['title'] ?? 'Badge').toString();
+    final rarity = (badge?['rarity'] ?? 'common').toString();
+
+    return Container(
+      width: 150,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF101013),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: rarity == 'rare'
+              ? const Color(0xFFFFB74D)
+              : rarity == 'uncommon'
+                  ? const Color(0xFF4FC3F7)
+                  : const Color(0xFF232329),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFFF5F5F5),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            rarity.toUpperCase(),
+            style: const TextStyle(
+              color: Color(0xFF9A9AA3),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ],
       ),
     );
@@ -733,8 +1108,8 @@ class _SocialScreenState extends State<SocialScreen> {
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
-                          Text(
+                        children: [
+                          const Text(
                             'Control Center',
                             style: TextStyle(
                               color: Color(0xFFF5F5F5),
@@ -742,10 +1117,10 @@ class _SocialScreenState extends State<SocialScreen> {
                               fontWeight: FontWeight.w800,
                             ),
                           ),
-                          SizedBox(height: 4),
+                          const SizedBox(height: 4),
                           Text(
-                            'Social navigation and account actions.',
-                            style: TextStyle(
+                            '$_currentTitle • Lv $_prestigeLevel',
+                            style: const TextStyle(
                               color: Color(0xFF9A9AA3),
                               fontSize: 12,
                             ),
@@ -760,7 +1135,7 @@ class _SocialScreenState extends State<SocialScreen> {
               _buildDrawerTile(
                 icon: Icons.group_outlined,
                 title: 'Friends',
-                subtitle: 'Friends list and search',
+                subtitle: 'Friends list and public identity preview',
                 onTap: _openFriends,
               ),
               _buildDrawerTile(

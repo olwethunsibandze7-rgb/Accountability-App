@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:ui';
+
 import 'package:achievr_app/Providers/focus_runtime_controller_provider.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -7,19 +11,38 @@ import 'Screens/home_screen.dart';
 import 'Services/focus_engine_models.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  BindingBase.debugZoneErrorsAreFatal = true;
 
-  await Supabase.initialize(
-    url: 'https://lqfqkjyjrwizzxullulo.supabase.co',
-    anonKey:
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxxZnFranlqcndpenp4dWxsdWxvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE4OTg2MjcsImV4cCI6MjA4NzQ3NDYyN30.pDrtRRZpDFyfoZZGW16FBdPshcUDQZxNTLD4MsLFYkA',
-  );
+  await runZonedGuarded(() async {
+    WidgetsFlutterBinding.ensureInitialized();
 
-  runApp(
-    const ProviderScope(
-      child: AchievrApp(),
-    ),
-  );
+    FlutterError.onError = (FlutterErrorDetails details) {
+      FlutterError.presentError(details);
+      debugPrint('FLUTTER ERROR: ${details.exception}');
+      debugPrint('${details.stack}');
+    };
+
+    PlatformDispatcher.instance.onError = (error, stack) {
+      debugPrint('UNCAUGHT PLATFORM ERROR: $error');
+      debugPrint('$stack');
+      return true;
+    };
+
+    await Supabase.initialize(
+      url: 'https://lqfqkjyjrwizzxullulo.supabase.co',
+      anonKey:
+          'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxxZnFranlqcndpenp4dWxsdWxvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE4OTg2MjcsImV4cCI6MjA4NzQ3NDYyN30.pDrtRRZpDFyfoZZGW16FBdPshcUDQZxNTLD4MsLFYkA',
+    );
+
+    runApp(
+      const ProviderScope(
+        child: AchievrApp(),
+      ),
+    );
+  }, (error, stack) {
+    debugPrint('ZONED ERROR: $error');
+    debugPrint('$stack');
+  });
 }
 
 class AchievrApp extends ConsumerWidget {

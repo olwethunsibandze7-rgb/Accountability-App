@@ -26,12 +26,24 @@ class AppPolicyService {
           habit_id,
           goal_id,
           title,
+          description,
           verification_type,
           verification_locked,
           evidence_type,
+          enforcement_level,
           active,
+          target_frequency,
           duration_minutes,
-          min_valid_minutes
+          habit_template_id,
+          min_valid_minutes,
+          min_completion_ratio,
+          max_interruptions,
+          grace_seconds,
+          strict_fail_on_exit,
+          requires_verifier,
+          base_points,
+          penalty_points,
+          tier_weight
         ''')
         .eq('habit_id', habitId)
         .maybeSingle();
@@ -178,10 +190,7 @@ class AppPolicyService {
   Future<void> removeHabitAppPolicy({
     required String habitId,
   }) async {
-    await _supabase
-        .from('habit_app_policies')
-        .delete()
-        .eq('habit_id', habitId);
+    await _supabase.from('habit_app_policies').delete().eq('habit_id', habitId);
   }
 
   Future<void> addAllowedAppToHabit({
@@ -223,8 +232,8 @@ class AppPolicyService {
 
     final existingSelectedApps =
         List<Map<String, dynamic>>.from(
-      snapshot['selected_allowed_apps_full'] ?? [],
-    );
+          snapshot['selected_allowed_apps_full'] ?? [],
+        );
 
     if (existingSelectedApps.isNotEmpty) {
       throw Exception(
@@ -265,23 +274,18 @@ class AppPolicyService {
       );
     }
 
-    final filtered = apps
-        .where(
-          (app) =>
-              (app['app_identifier'] ?? '').trim().isNotEmpty &&
+    final filtered =
+        apps.where((app) {
+          return (app['app_identifier'] ?? '').trim().isNotEmpty &&
               (app['app_label'] ?? '').trim().isNotEmpty &&
-              !_achievrAppIds.contains((app['app_identifier'] ?? '').trim()),
-        )
-        .toList();
+              !_achievrAppIds.contains((app['app_identifier'] ?? '').trim());
+        }).toList();
 
     if (filtered.length > 1) {
       throw Exception('Only one extra app can be allowed for a focus habit.');
     }
 
-    await _supabase
-        .from('habit_allowed_apps')
-        .delete()
-        .eq('habit_id', habitId);
+    await _supabase.from('habit_allowed_apps').delete().eq('habit_id', habitId);
 
     if (filtered.isEmpty) return;
 
@@ -388,35 +392,30 @@ class AppPolicyService {
     }
 
     final policy = await fetchHabitAppPolicy(habitId: habitId);
-    final selectedAllowedApps =
-        await fetchAllowedAppsForHabit(habitId: habitId);
+    final selectedAllowedApps = await fetchAllowedAppsForHabit(habitId: habitId);
 
     final resolvedMode = _resolveEffectivePolicyMode(policy);
     final resolvedGraceSeconds =
         (_coerceInt(policy?['leave_grace_seconds']) ?? 30).clamp(0, 3600);
 
-    final selectedIdentifiers = selectedAllowedApps
-        .map((app) => (app['app_identifier'] ?? '').toString())
-        .where((id) => id.isNotEmpty)
-        .toList();
+    final selectedIdentifiers =
+        selectedAllowedApps
+            .map((app) => (app['app_identifier'] ?? '').toString())
+            .where((id) => id.isNotEmpty)
+            .toList();
 
-    final selectedLabels = selectedAllowedApps
-        .map((app) => (app['app_label'] ?? '').toString())
-        .where((label) => label.isNotEmpty)
-        .toList();
+    final selectedLabels =
+        selectedAllowedApps
+            .map((app) => (app['app_label'] ?? '').toString())
+            .where((label) => label.isNotEmpty)
+            .toList();
 
     return {
       'app_policy_mode': resolvedMode,
       'leave_grace_seconds': resolvedGraceSeconds,
       'allow_screen_off': true,
-      'allowed_app_identifiers': [
-        ..._achievrAppIds,
-        ...selectedIdentifiers,
-      ],
-      'allowed_app_labels': [
-        'Achievr',
-        ...selectedLabels,
-      ],
+      'allowed_app_identifiers': [..._achievrAppIds, ...selectedIdentifiers],
+      'allowed_app_labels': ['Achievr', ...selectedLabels],
       'selected_allowed_app_identifiers': selectedIdentifiers,
       'selected_allowed_app_labels': selectedLabels,
       'selected_allowed_apps_full': selectedAllowedApps,

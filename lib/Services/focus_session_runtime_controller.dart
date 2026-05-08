@@ -1,6 +1,7 @@
-// ignore_for_file: unused_local_variable, unnecessary_import
+// ignore_for_file: unused_local_variable
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:achievr_app/Services/app_policy_service.dart';
 import 'package:achievr_app/Services/device_runtime_service.dart';
@@ -188,6 +189,8 @@ class FocusSessionRuntimeController extends ChangeNotifier
 
   static const Duration _foregroundStabilizationWindow =
       Duration(seconds: 3);
+
+  bool get _supportsNativeFocusRuntime => !kIsWeb && Platform.isAndroid;
 
   String? _extractHabitIdFromLog(Map<String, dynamic>? log) {
     if (log == null) return null;
@@ -398,7 +401,10 @@ class FocusSessionRuntimeController extends ChangeNotifier
       }
 
       _emit();
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('ATTACH TO LOG ERROR: $e');
+      debugPrint('$st');
+
       _state = _state.copyWith(
         isLoading: false,
         error: 'Failed to load focus runtime.\n$e',
@@ -408,9 +414,13 @@ class FocusSessionRuntimeController extends ChangeNotifier
   }
 
   Future<bool> _safeUsageAccessCheck() async {
+    if (!_supportsNativeFocusRuntime) return false;
+
     try {
       return await _deviceRuntimeService.hasUsageAccess();
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('USAGE ACCESS CHECK ERROR: $e');
+      debugPrint('$st');
       return false;
     }
   }
@@ -445,7 +455,9 @@ class FocusSessionRuntimeController extends ChangeNotifier
       }
 
       return allowed;
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('LOCATION PREPARATION ERROR: $e');
+      debugPrint('$st');
       return false;
     }
   }
@@ -516,6 +528,13 @@ class FocusSessionRuntimeController extends ChangeNotifier
   }
 
   Future<void> startSessionForAttachedLog() async {
+    if (!_supportsNativeFocusRuntime) {
+      throw Exception(
+        'Live Focus Mode is currently supported on Android only. '
+        'Use an Android phone or Android emulator.',
+      );
+    }
+
     final logId = _state.logId;
     final habitId = _state.habitId;
 
@@ -523,112 +542,166 @@ class FocusSessionRuntimeController extends ChangeNotifier
       throw Exception('Missing log or habit id.');
     }
 
-    final started = await _focusRuntimeService.startFocusSession(
-      logId: logId,
-      habitId: habitId,
-      currentLatitude: _latestPosition?.latitude,
-      currentLongitude: _latestPosition?.longitude,
-      initialForegroundAppIdentifier: 'com.example.achievr_app',
-      isScreenOff: false,
-    );
+    try {
+      final started = await _focusRuntimeService.startFocusSession(
+        logId: logId,
+        habitId: habitId,
+        currentLatitude: _latestPosition?.latitude,
+        currentLongitude: _latestPosition?.longitude,
+        initialForegroundAppIdentifier: 'com.example.achievr_app',
+        isScreenOff: false,
+      );
 
-    final snapshot = FocusRuntimeSnapshot(
-      capturedAt: DateTime.now(),
-      foregroundAppId: 'com.example.achievr_app',
-      isScreenOff: false,
-      latitude: _latestPosition?.latitude,
-      longitude: _latestPosition?.longitude,
-    );
+      final snapshot = FocusRuntimeSnapshot(
+        capturedAt: DateTime.now(),
+        foregroundAppId: 'com.example.achievr_app',
+        isScreenOff: false,
+        latitude: _latestPosition?.latitude,
+        longitude: _latestPosition?.longitude,
+      );
 
-    _engine ??= _buildEngine(
-      habit: _state.habit,
-      policySnapshot: _state.policySnapshot,
-      locationConfig: _state.locationConfig,
-    );
+      _engine ??= _buildEngine(
+        habit: _state.habit,
+        policySnapshot: _state.policySnapshot,
+        locationConfig: _state.locationConfig,
+      );
 
-    final result = _engine!.start(snapshot);
+      final result = _engine!.start(snapshot);
 
-    _lastStableForegroundAppId = 'com.example.achievr_app';
+      _lastStableForegroundAppId = 'com.example.achievr_app';
 
-    _state = _state.copyWith(
-      session: started,
-      engineState: result.state,
-      focusSessionId: started['focus_session_id']?.toString(),
-      clearError: true,
-      clearSyncWarning: true,
-    );
+      _state = _state.copyWith(
+        session: started,
+        engineState: result.state,
+        focusSessionId: started['focus_session_id']?.toString(),
+        clearError: true,
+        clearSyncWarning: true,
+      );
 
-    _lastBackendSyncAt = DateTime.now();
+      _lastBackendSyncAt = DateTime.now();
 
-    await ensureMonitoringStarted();
-    _startSyncTimer();
-    _emit();
+      await ensureMonitoringStarted();
+      _startSyncTimer();
+      _emit();
+    } catch (e, st) {
+      debugPrint('START SESSION ERROR: $e');
+      debugPrint('$st');
+      rethrow;
+    }
   }
 
   Future<void> ensureMonitoringStarted() async {
+    if (!_supportsNativeFocusRuntime) {
+      _state = _state.copyWith(
+        syncWarning:
+            'Live monitoring is supported on Android only. Use an Android device or emulator.',
+        monitoringActive: false,
+      );
+      _emit();
+      return;
+    }
+
     if (!_state.usageAccessReady) return;
     if (_state.focusSessionId == null || _state.habitId == null) return;
 
-    final snapshot = _state.policySnapshot ??
-        await _appPolicyService.buildFocusSessionPolicySnapshot(
-          habitId: _state.habitId!,
-        );
+    if (_state.monitoringActive && _runtimeSub != null) {
+      return;
+    }
 
-    final allowedApps =
-        (snapshot['allowed_app_identifiers'] as List<dynamic>? ?? [])
-            .map((e) => e.toString())
-            .toList();
+    try {
+      await _runtimeSub?.cancel();
+      _runtimeSub = null;
 
-    await _deviceRuntimeService.startMonitoring(
-      allowedAppIdentifiers: allowedApps,
-      allowScreenOff: (snapshot['allow_screen_off'] as bool?) ?? true,
-      pollIntervalMs: 1000,
-      focusSessionId: _state.focusSessionId,
-      habitId: _state.habitId,
-      logId: _state.logId,
-      graceSeconds: _coerceInt(snapshot['leave_grace_seconds']),
-    );
+      try {
+        await _deviceRuntimeService.stopMonitoring();
+      } catch (_) {}
 
-    await _runtimeSub?.cancel();
-    _runtimeSub = _deviceRuntimeService.runtimeStream().listen(
-      _handleRuntimeSnapshot,
-      onError: (error) {
-        _state = _state.copyWith(
-          syncWarning: 'Runtime monitoring issue. Retrying.',
-        );
-        _emit();
-      },
-    );
+      final snapshot = _state.policySnapshot ??
+          await _appPolicyService.buildFocusSessionPolicySnapshot(
+            habitId: _state.habitId!,
+          );
 
-    _state = _state.copyWith(monitoringActive: true);
-    _emit();
+      final allowedApps =
+          (snapshot['allowed_app_identifiers'] as List<dynamic>? ?? [])
+              .map((e) => e.toString())
+              .toList();
+
+      await _deviceRuntimeService.startMonitoring(
+        allowedAppIdentifiers: allowedApps,
+        allowScreenOff: (snapshot['allow_screen_off'] as bool?) ?? true,
+        pollIntervalMs: 1000,
+        focusSessionId: _state.focusSessionId,
+        habitId: _state.habitId,
+        logId: _state.logId,
+        graceSeconds: _coerceInt(snapshot['leave_grace_seconds']),
+      );
+
+      _runtimeSub = _deviceRuntimeService.runtimeStream().listen(
+        _handleRuntimeSnapshot,
+        onError: (error, stack) {
+          debugPrint('RUNTIME STREAM ERROR: $error');
+          debugPrint('$stack');
+
+          _state = _state.copyWith(
+            syncWarning: 'Runtime monitoring issue. Retrying.',
+            monitoringActive: false,
+          );
+          _emit();
+        },
+      );
+
+      _state = _state.copyWith(
+        monitoringActive: true,
+        clearSyncWarning: true,
+      );
+      _emit();
+    } catch (e, st) {
+      debugPrint('ENSURE MONITORING START ERROR: $e');
+      debugPrint('$st');
+
+      _state = _state.copyWith(
+        monitoringActive: false,
+        syncWarning: 'Could not start live monitoring: $e',
+      );
+      _emit();
+    }
   }
 
   Future<void> _handleRuntimeSnapshot(DeviceRuntimeSnapshot raw) async {
-    if (_engine == null) return;
+    try {
+      if (_engine == null) return;
 
-    await _maybeRefreshLocation();
+      await _maybeRefreshLocation();
 
-    final resolvedForegroundAppId = _resolveForegroundAppId(
-      rawForegroundAppId: raw.foregroundAppIdentifier,
-      isScreenOff: raw.isScreenOff,
-    );
+      final resolvedForegroundAppId = _resolveForegroundAppId(
+        rawForegroundAppId: raw.foregroundAppIdentifier,
+        isScreenOff: raw.isScreenOff,
+      );
 
-    final snapshot = FocusRuntimeSnapshot(
-      capturedAt: DateTime.now(),
-      foregroundAppId: resolvedForegroundAppId,
-      isScreenOff: raw.isScreenOff,
-      latitude: _latestPosition?.latitude,
-      longitude: _latestPosition?.longitude,
-    );
+      final snapshot = FocusRuntimeSnapshot(
+        capturedAt: DateTime.now(),
+        foregroundAppId: resolvedForegroundAppId,
+        isScreenOff: raw.isScreenOff,
+        latitude: _latestPosition?.latitude,
+        longitude: _latestPosition?.longitude,
+      );
 
-    final result = _engine!.tick(snapshot);
+      final result = _engine!.tick(snapshot);
 
-    _state = _state.copyWith(
-      engineState: result.state,
-      clearSyncWarning: true,
-    );
-    _emit();
+      _state = _state.copyWith(
+        engineState: result.state,
+        clearSyncWarning: true,
+      );
+      _emit();
+    } catch (e, st) {
+      debugPrint('HANDLE RUNTIME SNAPSHOT ERROR: $e');
+      debugPrint('$st');
+
+      _state = _state.copyWith(
+        syncWarning: 'Runtime issue detected. Monitoring is recovering.',
+      );
+      _emit();
+    }
   }
 
   Future<void> _maybeRefreshLocation() async {
@@ -648,7 +721,10 @@ class FocusSessionRuntimeController extends ChangeNotifier
     try {
       _latestPosition = await _locationRuntimeService.getCurrentPosition();
       _lastLocationRefreshAt = now;
-    } catch (_) {}
+    } catch (e, st) {
+      debugPrint('LOCATION REFRESH ERROR: $e');
+      debugPrint('$st');
+    }
   }
 
   void _startSyncTimer() {
@@ -659,6 +735,7 @@ class FocusSessionRuntimeController extends ChangeNotifier
   }
 
   Future<void> syncToBackend() async {
+    if (!_supportsNativeFocusRuntime) return;
     if (_state.focusSessionId == null || _engine == null) return;
     if (!_state.hasLiveSession) return;
 
@@ -689,7 +766,10 @@ class FocusSessionRuntimeController extends ChangeNotifier
         clearSyncWarning: true,
       );
       _emit();
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('SYNC TO BACKEND ERROR: $e');
+      debugPrint('$st');
+
       _state = _state.copyWith(
         syncWarning: 'Temporary sync issue. Monitoring will retry.',
       );
@@ -700,36 +780,48 @@ class FocusSessionRuntimeController extends ChangeNotifier
   Future<void> completeSession() async {
     if (_state.focusSessionId == null || _engine == null) return;
 
-    final result = _engine!.complete(DateTime.now());
-    final updated = await _focusRuntimeService.completeFocusSession(
-      focusSessionId: _state.focusSessionId!,
-    );
+    try {
+      final result = _engine!.complete(DateTime.now());
+      final updated = await _focusRuntimeService.completeFocusSession(
+        focusSessionId: _state.focusSessionId!,
+      );
 
-    await stopMonitoring();
+      await stopMonitoring();
 
-    _state = _state.copyWith(
-      engineState: result.state,
-      session: updated,
-      monitoringActive: false,
-    );
-    _emit();
+      _state = _state.copyWith(
+        engineState: result.state,
+        session: updated,
+        monitoringActive: false,
+      );
+      _emit();
+    } catch (e, st) {
+      debugPrint('COMPLETE SESSION ERROR: $e');
+      debugPrint('$st');
+      rethrow;
+    }
   }
 
   Future<void> abandonSession() async {
     if (_state.focusSessionId == null || _engine == null) return;
 
-    final result = _engine!.abandon(DateTime.now());
-    await _focusRuntimeService.abandonFocusSession(
-      focusSessionId: _state.focusSessionId!,
-    );
+    try {
+      final result = _engine!.abandon(DateTime.now());
+      await _focusRuntimeService.abandonFocusSession(
+        focusSessionId: _state.focusSessionId!,
+      );
 
-    await stopMonitoring();
+      await stopMonitoring();
 
-    _state = _state.copyWith(
-      engineState: result.state,
-      monitoringActive: false,
-    );
-    _emit();
+      _state = _state.copyWith(
+        engineState: result.state,
+        monitoringActive: false,
+      );
+      _emit();
+    } catch (e, st) {
+      debugPrint('ABANDON SESSION ERROR: $e');
+      debugPrint('$st');
+      rethrow;
+    }
   }
 
   Future<void> stopMonitoring() async {
@@ -739,7 +831,10 @@ class FocusSessionRuntimeController extends ChangeNotifier
 
     try {
       await _deviceRuntimeService.stopMonitoring();
-    } catch (_) {}
+    } catch (e, st) {
+      debugPrint('STOP MONITORING ERROR: $e');
+      debugPrint('$st');
+    }
 
     _state = _state.copyWith(monitoringActive: false);
     _emit();

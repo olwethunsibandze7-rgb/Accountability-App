@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:achievr_app/Screens/Social/friend_profile_screen.dart';
 import 'package:achievr_app/Services/friends_service.dart';
 import 'package:flutter/material.dart';
 
@@ -219,6 +220,39 @@ class _FriendsScreenState extends State<FriendsScreen> {
     }
   }
 
+  int _coerceInt(dynamic value) {
+    if (value is int) return value;
+    if (value is double) return value.round();
+    return int.tryParse('${value ?? ''}') ?? 0;
+  }
+
+  String _profileTitle(Map<String, dynamic>? profile) {
+    final title = profile?['current_title'];
+    if (title is String && title.trim().isNotEmpty) {
+      return title.trim();
+    }
+    return 'Starter';
+  }
+
+  int _profileLevel(Map<String, dynamic>? profile) {
+    final level = _coerceInt(profile?['prestige_level']);
+    return level <= 0 ? 1 : level;
+  }
+
+  int _profileXp(Map<String, dynamic>? profile) {
+    final stats = profile?['stats'] as Map<String, dynamic>?;
+    return _coerceInt(stats?['execution_points']);
+  }
+
+  int _profileCurrentStreak(Map<String, dynamic>? profile) {
+    final stats = profile?['stats'] as Map<String, dynamic>?;
+    return _coerceInt(stats?['current_streak']);
+  }
+
+  bool _scoreVisible(Map<String, dynamic>? profile) {
+    return profile?['accountability_score_visible'] == true;
+  }
+
   Widget _buildSectionTitle(String title, {String? subtitle}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10, top: 4),
@@ -304,7 +338,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
           ),
           const SizedBox(height: 10),
           const Text(
-            'Manage your accountability circle, search for people, and keep friend management in one place.',
+            'Search people, preview their accountability identity, and build your circle without losing context.',
             style: TextStyle(
               color: Color(0xFFB3B3BB),
               height: 1.45,
@@ -366,76 +400,138 @@ class _FriendsScreenState extends State<FriendsScreen> {
     );
   }
 
+  Widget _buildIdentityLine(Map<String, dynamic> profile, {required bool isFriend}) {
+    final title = _profileTitle(profile);
+    final level = _profileLevel(profile);
+    final xp = _profileXp(profile);
+    final streak = _profileCurrentStreak(profile);
+    final showScore = _scoreVisible(profile) || isFriend;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            color: Color(0xFF4FC3F7),
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          showScore
+              ? 'Lv $level • $xp XP • Streak $streak'
+              : 'Lv $level • Streak $streak',
+          style: const TextStyle(
+            color: Color(0xFF9A9AA3),
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildFriendCard(Map<String, dynamic> friend) {
     final otherProfile = friend['other_profile'] as Map<String, dynamic>?;
     final username = (otherProfile?['username'] ?? 'Unknown').toString();
     final publicHandle = (otherProfile?['public_handle'] ?? '').toString();
     final otherUserId = friend['other_user_id']?.toString() ?? '';
 
-    return Container(
-      margin: const EdgeInsets.only(top: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF101013),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF232329)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              color: const Color(0xFF17171A),
-              shape: BoxShape.circle,
-              border: Border.all(color: const Color(0xFF232329)),
-            ),
-            child: Center(
-              child: Text(
-                username.isNotEmpty ? username[0].toUpperCase() : 'U',
-                style: const TextStyle(
-                  color: Color(0xFFF5F5F5),
-                  fontWeight: FontWeight.w800,
+    return GestureDetector(
+      onTap: otherProfile == null
+          ? null
+          : () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => FriendProfileScreen(
+                    userId: otherUserId,
+                    isFriend: true,
+                  ),
+                ),
+              );
+            },
+      child: Container(
+        margin: const EdgeInsets.only(top: 10),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF101013),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFF232329)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                color: const Color(0xFF17171A),
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFF232329)),
+              ),
+              child: Center(
+                child: Text(
+                  username.isNotEmpty ? username[0].toUpperCase() : 'U',
+                  style: const TextStyle(
+                    color: Color(0xFFF5F5F5),
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  username,
-                  style: const TextStyle(
-                    color: Color(0xFFF5F5F5),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    username,
+                    style: const TextStyle(
+                      color: Color(0xFFF5F5F5),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
                   ),
+                  const SizedBox(height: 4),
+                  Text(
+                    publicHandle.isNotEmpty ? '@$publicHandle' : otherUserId,
+                    style: const TextStyle(
+                      color: Color(0xFF9A9AA3),
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  if (otherProfile != null)
+                    _buildIdentityLine(otherProfile, isFriend: true),
+                ],
+              ),
+            ),
+            Column(
+              children: [
+                OutlinedButton(
+                  onPressed: () => _removeFriend(friend),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF3A3A42)),
+                    foregroundColor: const Color(0xFFF5F5F5),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text('Remove'),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  publicHandle.isNotEmpty ? '@$publicHandle' : otherUserId,
-                  style: const TextStyle(
-                    color: Color(0xFF9A9AA3),
-                    fontSize: 12,
+                const SizedBox(height: 6),
+                const Text(
+                  'Tap to view',
+                  style: TextStyle(
+                    color: Color(0xFF7C7C84),
+                    fontSize: 11,
                   ),
                 ),
               ],
             ),
-          ),
-          OutlinedButton(
-            onPressed: () => _removeFriend(friend),
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: Color(0xFF3A3A42)),
-              foregroundColor: const Color(0xFFF5F5F5),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            child: const Text('Remove'),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -455,62 +551,102 @@ class _FriendsScreenState extends State<FriendsScreen> {
       ),
       child: Row(
         children: [
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              color: const Color(0xFF17171A),
-              shape: BoxShape.circle,
-              border: Border.all(color: const Color(0xFF232329)),
-            ),
-            child: Center(
-              child: Text(
-                username.isNotEmpty ? username[0].toUpperCase() : 'U',
-                style: const TextStyle(
-                  color: Color(0xFFF5F5F5),
-                  fontWeight: FontWeight.w800,
+          GestureDetector(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => FriendProfileScreen(
+                    userId: userId,
+                    isFriend: false,
+                  ),
+                ),
+              );
+            },
+            child: Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                color: const Color(0xFF17171A),
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFF232329)),
+              ),
+              child: Center(
+                child: Text(
+                  username.isNotEmpty ? username[0].toUpperCase() : 'U',
+                  style: const TextStyle(
+                    color: Color(0xFFF5F5F5),
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
             ),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  username,
-                  style: const TextStyle(
-                    color: Color(0xFFF5F5F5),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
+            child: GestureDetector(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => FriendProfileScreen(
+                      userId: userId,
+                      isFriend: false,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  publicHandle.isNotEmpty ? '@$publicHandle' : userId,
-                  style: const TextStyle(
-                    color: Color(0xFF9A9AA3),
-                    fontSize: 12,
+                );
+              },
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    username,
+                    style: const TextStyle(
+                      color: Color(0xFFF5F5F5),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ),
-          ElevatedButton(
-            onPressed: () => _sendRequest(userId),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFF5F5F5),
-              foregroundColor: Colors.black,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+                  const SizedBox(height: 4),
+                  Text(
+                    publicHandle.isNotEmpty ? '@$publicHandle' : userId,
+                    style: const TextStyle(
+                      color: Color(0xFF9A9AA3),
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  _buildIdentityLine(profile, isFriend: false),
+                ],
               ),
             ),
-            child: const Text(
-              'Add',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
+          ),
+          Column(
+            children: [
+              ElevatedButton(
+                onPressed: () => _sendRequest(userId),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFF5F5F5),
+                  foregroundColor: Colors.black,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text(
+                  'Add',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Tap to view',
+                style: TextStyle(
+                  color: Color(0xFF7C7C84),
+                  fontSize: 11,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -544,7 +680,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
         children: [
           _buildSectionTitle(
             'Your circle',
-            subtitle: 'Accepted accountability partners.',
+            subtitle: 'Accepted accountability partners with identity preview.',
           ),
           if (_friends.isEmpty)
             const Text(
@@ -580,7 +716,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
         children: [
           _buildSectionTitle(
             'Search results',
-            subtitle: 'Send requests without leaving this page.',
+            subtitle:
+                'Preview title, level, and accountability identity before adding.',
           ),
           if (_isSearching)
             const Padding(
